@@ -4,19 +4,36 @@ A learning project building toward an Edge AI system on Raspberry Pi, combining 
 
 The current implementation is a C terminal application for GPIO control. It reads temperatures entered manually, applies hysteresis around a user-defined threshold, and controls an LED through the Linux GPIO character device API v2.
 
-## Project goal
+## Project goals
 
-The long-term goal is to build a Raspberry Pi system that collects data from physical sensors, processes it locally, and runs AI inference on the device to detect relevant conditions and drive hardware responses.
+The long-term goal is to develop two Edge AI applications on Raspberry Pi, sharing foundations in embedded programming, data acquisition, and local inference.
+
+### 1. Intelligent environmental monitoring
+
+Build a system that collects measurements from physical sensors and uses models developed with Python and Keras to detect anomalies, identify patterns, and drive hardware responses to relevant environmental conditions.
+
+### 2. Home security with computer vision and facial recognition
+
+Build a personal home security system that captures images from a camera and uses computer vision and facial recognition to distinguish known faces from unrecognized faces.
+
+The planned control logic has two states:
+
+- **DISARMED:** alerts for unrecognized faces are disabled.
+- **ARMED:** detecting an unrecognized face should trigger an alert to the user.
+
+This future application will combine camera acquisition, model inference, state transitions, and notification handling. Model development will use Python and Keras; recognition thresholds, false positives, missed detections, and repeated alerts will need evaluation before integration. The camera, model, and notification channel have not been selected yet.
+
+Both applications are future goals. Camera acquisition, facial recognition, ARMED/DISARMED states, and security notifications are not implemented. The current temperature alarm/LED state described below does not represent this planned security state machine.
 
 The project will grow through incremental, working milestones:
 
 1. **Embedded foundations:** develop modular C/C++ code for GPIO control, reliable input handling, buttons, and hardware events.
 2. **Sensor data collection:** acquire measurements, process samples, and record datasets for analysis.
-3. **Model development:** use Python and Keras to train and evaluate models for sensor-based tasks such as anomaly detection.
+3. **Model development:** use Python and Keras to train and evaluate models for sensor-based anomaly detection and camera-based facial recognition.
 4. **Edge deployment:** adapt a suitable model for inference on the Raspberry Pi and evaluate its accuracy, latency, and resource usage.
 5. **System integration:** connect data acquisition, inference, and hardware actions in a documented application.
 
-These are development goals. Sensor acquisition and AI inference are not implemented yet. Model choice and deployment details will depend on the collected data and the Raspberry Pi's hardware limits.
+These are development goals. Sensor acquisition and AI inference are not implemented yet. Model choice and deployment details for both applications will depend on the available data and the Raspberry Pi's hardware limits; accuracy, latency, and resource usage on the Raspberry Pi 3 B+ remain to be measured.
 
 ## Current functionality
 
