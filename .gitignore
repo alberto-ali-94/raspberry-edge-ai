@@ -1,0 +1,7 @@
+# Build artifacts
+*.o
+/control_center
+/old/test
+
+# macOS metadata
+.DS_Store
