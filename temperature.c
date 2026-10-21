@@ -1,4 +1,4 @@
-#include "temperatura.h"
+#include "temperature.h"
 
 int is_temperature_high(int temperature, int threshold){
     return (temperature>threshold);

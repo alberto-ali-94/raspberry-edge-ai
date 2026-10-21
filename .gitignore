@@ -1,7 +1,7 @@
 # Build artifacts
 *.o
 /control_center
-/old/test
+/Keras_Practice/logs
 
 # macOS metadata
 .DS_Store

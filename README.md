@@ -1,127 +1,167 @@
 # Raspberry Edge AI
 
-A learning project building toward an Edge AI system on Raspberry Pi, combining embedded programming, sensor integration, and on-device inference.
+Raspberry Edge AI is a project to build a local intelligence system for **environmental monitoring** and **home security** on Raspberry Pi. It brings together embedded control, sensor and camera data, and models developed with Python and Keras.
 
-The current implementation is a C terminal application for GPIO control. It reads temperatures entered manually, applies hysteresis around a user-defined threshold, and controls an LED through the Linux GPIO character device API v2.
+The intended result is a system that can collect information from its surroundings, interpret it on the device, and trigger hardware actions or notifications. C provides the embedded foundations; Python and Keras support model development and the future inference pipeline.
 
-## Project goals
+The project is developed incrementally. The sections below distinguish the final vision, the capabilities currently implemented, and the additions recorded through successive commits.
 
-The long-term goal is to develop two Edge AI applications on Raspberry Pi, sharing foundations in embedded programming, data acquisition, and local inference.
+## Final project vision
 
-### 1. Intelligent environmental monitoring
+### Intelligent environmental monitoring
 
-Build a system that collects measurements from physical sensors and uses models developed with Python and Keras to detect anomalies, identify patterns, and drive hardware responses to relevant environmental conditions.
+Collect measurements using the sensors provided with the **Freenove FNK0020 Ultimate Starter Kit**, process and store the data, and use AI models to detect anomalies and relevant patterns. The initial environmental monitoring scope uses kit components without additional sensor purchases.
 
-### 2. Home security with computer vision and facial recognition
+| Planned measurement | Kit component | Intended use |
+|---|---|---|
+| Ambient temperature (°C) | DHT11 | Track temperature changes and supply real readings to the temperature-control application |
+| Relative humidity (% RH) | DHT11 | Track moisture conditions alongside temperature |
+| Relative ambient light level | Photoresistor and ADC module | Record changes in illumination and distinguish brighter and darker conditions |
 
-Build a personal home security system that captures images from a camera and uses computer vision and facial recognition to distinguish known faces from unrecognized faces.
+A thermistor is also available in the kit as an alternative temperature-acquisition exercise using an ADC. It is not required alongside the DHT11 for the initial dataset. The Freenove documentation covers ADS7830 and PCF8591 ADC variants; the actual module must be identified before wiring and implementation.
 
-The planned control logic has two states:
+Record each sample with its acquisition time, validate readings, and build time series for later analysis and Keras model development. Connect the results to local indicators and hardware responses. Photoresistor readings initially represent relative light levels, not calibrated lux measurements.
 
-- **DISARMED:** alerts for unrecognized faces are disabled.
-- **ARMED:** detecting an unrecognized face should trigger an alert to the user.
+These are planned integrations. The current application still receives temperatures from the keyboard; sensor acquisition and dataset logging have not yet been implemented. Component availability and the ADC variant will be checked against the physical kit before integration. The sensor scope follows the [official Freenove FNK0020 tutorials](https://docs.freenove.com/projects/fnk0020/en/latest/fnk0020/python-tutorial.html).
 
-This future application will combine camera acquisition, model inference, state transitions, and notification handling. Model development will use Python and Keras; recognition thresholds, false positives, missed detections, and repeated alerts will need evaluation before integration. The camera, model, and notification channel have not been selected yet.
+### Home security with computer vision
 
-Both applications are future goals. Camera acquisition, facial recognition, ARMED/DISARMED states, and security notifications are not implemented. The current temperature alarm/LED state described below does not represent this planned security state machine.
+Use the kit's **HC-SR501 PIR sensor** to record motion events and support the security application. A PIR detects movement and does not reliably establish whether a stationary person remains present. PIR integration is planned.
 
-The project will grow through incremental, working milestones:
+The longer-term vision also includes a camera and facial recognition to distinguish known faces from unrecognized faces. Camera hardware is outside the initial kit-sensor scope. The planned application has two operating states:
 
-1. **Embedded foundations:** develop modular C/C++ code for GPIO control, reliable input handling, buttons, and hardware events.
-2. **Sensor data collection:** acquire measurements, process samples, and record datasets for analysis.
-3. **Model development:** use Python and Keras to train and evaluate models for sensor-based anomaly detection and camera-based facial recognition.
-4. **Edge deployment:** adapt a suitable model for inference on the Raspberry Pi and evaluate its accuracy, latency, and resource usage.
-5. **System integration:** connect data acquisition, inference, and hardware actions in a documented application.
+- **DISARMED:** notifications for unrecognized faces are disabled.
+- **ARMED:** an unrecognized face can trigger a notification to the user.
 
-These are development goals. Sensor acquisition and AI inference are not implemented yet. Model choice and deployment details for both applications will depend on the available data and the Raspberry Pi's hardware limits; accuracy, latency, and resource usage on the Raspberry Pi 3 B+ remain to be measured.
+Camera acquisition, model selection, recognition thresholds, and the notification channel remain to be developed. Accuracy, false positives, latency, and resource consumption must be evaluated on the target hardware before the system can be considered reliable.
 
-## Current functionality
+### Planned processing flow
 
-- Accept an integer temperature threshold and successive integer temperatures from the keyboard.
-- Control an LED on GPIO17 using hysteresis: turn on above `threshold + 2`, turn off at or below `threshold - 2`, and retain the previous state between those boundaries.
-- Report whether each temperature is above the base threshold and whether the alarm is active.
-- Request GPIO18 and GPIO19 as inputs with internal pull-ups, in preparation for button integration. The main loop does not read these inputs yet.
-- Attempt to turn the LED off and release GPIO resources when an input or GPIO error reaches cleanup.
-
-Temperatures are entered manually; the application does not read a temperature sensor. The current hardware milestone provides foundations for the broader Edge AI project.
-
-## Requirements
-
-- A Raspberry Pi running Linux with GPIO character device API v2 support and compatible GPIO headers. The development device is a Raspberry Pi 3 B+.
-- A C11 compiler available as `gcc`, and Make.
-- Permission to access `/dev/gpiochip0`.
-- GPIO offsets 17, 18, and 19 available for the application's line request.
-- An LED circuit with an appropriate current-limiting resistor connected to GPIO17, matching the project's existing wiring.
-
-GPIO numbers here are line offsets, not physical header pin numbers. Verify the controller and wiring for your board before running the application.
-
-The full application uses Linux GPIO interfaces and must be built on the Raspberry Pi or another suitable Linux environment. The temperature and terminal I/O modules can be compiled separately on macOS. Python and Keras belong to future milestones and are not required for the current C application.
-
-## Project structure
-
-| File | Responsibility |
+| Stage | Purpose |
 |---|---|
-| `main.c` | Coordinates GPIO configuration, threshold input, temperature readings, hysteresis, LED state, and cleanup. |
-| `io.h` / `io.c` | Declare and implement `print_menu` and `read_integer`. |
-| `temperatura.h` / `temperatura.c` | Declare and implement `is_temperature_high` and the hysteresis function `update_alarm`. |
-| `gpio.h` / `gpio.c` | Declare and implement GPIO controller access, multi-line requests, line value operations, and descriptor cleanup. |
-| `old/` | Earlier learning probes and experiments; excluded from the main application build. |
-| `Makefile` | Defines dependencies, compilation of four object files, and executable linking. |
-| `.gitignore` | Excludes object files, known local executables, and macOS metadata. |
+| Acquisition | Read physical sensors and capture camera images |
+| Data preparation | Validate, organize, and record measurements and images |
+| Model development | Train and evaluate models with Python and Keras |
+| Edge inference | Run suitable models locally on Raspberry Pi |
+| Response | Update hardware outputs and generate application notifications |
 
-## Build
+These are target capabilities, not a description of an already completed system. The current alarm state belongs to the temperature/LED control application; it is separate from the future ARMED/DISARMED security states.
 
-From the project directory, run:
+## Development status
+
+The current development milestone is a **Hardware Control Center** written in C. It establishes GPIO control and keyboard/button event handling before physical sensors and AI inference are integrated.
+
+| Area | Status |
+|---|---|
+| Modular C application and Make-based build | Implemented |
+| LED control from manually entered temperatures | Implemented |
+| Keyboard and GPIO button handling with `poll()` | Implemented |
+| Robust signed input and button debounce | Incomplete |
+| Python/Keras practice notebooks | Included as standalone exercises |
+| Physical sensor acquisition and dataset logging | Planned |
+| Integrated on-device inference | Planned |
+| Camera-based security and notifications | Planned |
+
+The notebooks are learning resources, not an inference pipeline connected to the C application. The development board is currently a Raspberry Pi 3 B+; model feasibility and performance on this device remain to be measured.
+
+## Current capabilities
+
+- Accept an integer threshold and manually entered temperature readings.
+- Monitor standard input and GPIO button events through one `poll()` call after the initial threshold prompt.
+- Preserve partial temperature input across reads and accept successive newline-terminated readings.
+- Drive an LED on GPIO17 with hysteresis: turn on above `threshold + 1`, turn off at or below `threshold - 1`, and retain the current state between those boundaries.
+- Toggle the LED manually with GPIO19, including while waiting for a temperature.
+- Shut down with GPIO18, attempting to turn the LED off and release the GPIO request and controller.
+- Report the temperature comparison and alarm state, refreshing the visible terminal area when an event arrives.
+
+### Current hardware controls
+
+| GPIO line | Connection | Action |
+|---|---|---|
+| GPIO17 | LED with current-limiting resistor | Automatic control and manual toggle |
+| GPIO18 | Button to ground, internal pull-up | Orderly shutdown |
+| GPIO19 | Button to ground, internal pull-up | Invert the LED state |
+
+GPIO numbers are offsets within the selected controller, not physical header pin numbers. The current controller path is `/dev/gpiochip0`; verify it for the board being used.
+
+Button events use falling-edge detection without `ACTIVE_LOW`: pressing a button changes its input from high to low. Debouncing is not yet implemented.
+
+The manual button changes the actual LED state. Subsequent valid temperatures apply hysteresis to that state, so a reading inside the hysteresis band preserves the manual result.
+
+## Build and run the current application
+
+Requirements:
+
+- Linux with the GPIO character device API v2 and compatible headers.
+- A C11 compiler available as `gcc`, and Make.
+- Access to `/dev/gpiochip0` and available GPIO lines 17, 18, and 19.
+- The LED and buttons wired as described above.
+- A terminal supporting the display-control sequences used by the application.
+
+From the repository root on the Raspberry Pi:
 
 ```sh
 make
-```
-
-Make builds `main.o`, `io.o`, `temperatura.o`, and `gpio.o`, then links them into `control_center`. Compilation enables C11 and the `-Wall -Wextra -Wpedantic` warnings.
-
-Subsequent builds rebuild files according to their modification times and declared dependencies. For example, editing `io.c` rebuilds `io.o` and relinks the executable. Editing `io.h` also rebuilds `main.o`.
-
-To force a full rebuild:
-
-```sh
-make -B
-```
-
-## Run
-
-```sh
 ./control_center
 ```
 
-1. The application opens `/dev/gpiochip0` and requests GPIO17 as an output and GPIO18/GPIO19 as inputs with pull-ups.
-2. Enter an integer temperature threshold.
-3. Enter one integer temperature at a time, pressing Enter after each value.
-4. The application updates the LED using hysteresis and prints the threshold comparison and alarm state.
+The Makefile compiles `main.c`, `io.c`, `temperature.c`, and `gpio.c`, then links `control_center`. It enables C11 and `-Wall -Wextra -Wpedantic`. Use `make -B` to force a complete rebuild.
 
-There is currently no dedicated exit command: `-999` is treated as a temperature. Invalid input or end-of-input triggers the cleanup path. In a terminal, Ctrl+D at an empty input prompt can signal end-of-input; the application currently handles this as an input error and returns a nonzero status.
+Enter the threshold first, then one temperature per line. For the ordinary input path, use one to three decimal digits. GPIO19 toggles the LED; GPIO18 exits. Button handling starts after threshold entry.
 
-## Example
+For example, with threshold `30` and the LED initially off:
 
-With a threshold of `30` and the alarm initially off, enter these temperatures in order:
+| Action | LED result |
+|---|---|
+| Enter `31` | Off: not strictly above the turn-on boundary `31` |
+| Enter `32` | On |
+| Enter `30` | Remains on, inside the hysteresis band |
+| Enter `29` | Off |
+| Press GPIO19 | On |
+| Press GPIO18 | Shutdown; LED switch-off attempted before releasing resources |
 
-| Input temperature | Threshold comparison | Alarm / LED |
-|---|---|---|
-| `31` | Above threshold | Off: the turn-on boundary has not been crossed |
-| `33` | Above threshold | On: above `32` |
-| `30` | At or below threshold | Stays on: within the hysteresis band |
-| `28` | At or below threshold | Off: at or below `28` |
+The threshold comparison message and LED state may differ because the LED uses hysteresis. No physical temperature sensor is read yet. Python and Keras are not required to build or run this C milestone. Native macOS headers do not provide the Linux GPIO interfaces used by the full application.
 
-The threshold comparison and alarm state can differ because hysteresis takes the previous alarm state into account.
+## Repository components
 
-## Input handling and current limitations
+The paths below are tracked by Git and are part of the project's shared files.
 
-- `read_integer` uses `scanf("%d", p)`. Input is blocking, and the main loop does not process button events while waiting for keyboard input.
-- Entire input lines are not validated: `30abc` can initially be read as `30`, leaving the remaining characters for the next read. Input recovery and numeric range validation are not implemented yet.
-- Calculations of `threshold + 2` and `threshold - 2` are not guarded against integer overflow. Use ordinary temperature values away from the limits of `int`.
-- Invalid threshold input sets exit status `1`; invalid temperature input sets exit status `2`. GPIO and cleanup failures also produce nonzero exit statuses, and later cleanup failures can overwrite an earlier error code.
-- GPIO18/GPIO19 input handling, button debounce, and a dedicated shutdown command remain to be integrated into the main application.
-- The current source configuration and behavior are documented here; each hardware change still needs validation on the Raspberry Pi.
+| Path | Purpose |
+|---|---|
+| `main.c` | Application entry point, event loop, temperature logic, button actions, and cleanup |
+| `io.c` / `io.h` | Menu, input conversion, threshold input, and terminal display helpers |
+| `temperature.c` / `temperature.h` | Threshold comparison and hysteresis |
+| `gpio.c` / `gpio.h` | GPIO controller access, line requests, values, and descriptor cleanup |
+| `Makefile` | Main application build |
+| `Keras_Practice/` | Standalone Keras notebooks for learning and experimentation |
 
-## Next milestone
+## Known limitations
 
-Understand and integrate keyboard and GPIO event handling so that buttons can be processed while the application waits for temperature input. The intended controls are a manual LED toggle on GPIO18 and orderly shutdown on GPIO19. This milestone precedes sensor acquisition and the later AI pipeline.
+| Area | Current limitation |
+|---|---|
+| Button debounce | Contact bounce can generate several events for one press, causing repeated toggles. Falling-edge detection alone does not filter bounce. |
+| Four-digit temperatures | The 5-byte buffer allows three digit characters, a newline, and a string terminator. `1234` followed by Enter can fill it without consuming the newline; a later zero-length read may be mistaken for EOF and cause shutdown. Oversized lines are not recovered correctly. |
+| Negative temperatures | Short values such as `-5` or `-12` fit, but `-123` plus newline does not. A valid `-1` is confused with the parser's error return value. Signed input is not supported consistently. |
+| Complete-line validation | Trailing characters are not rejected reliably: `12x` can be converted to `12`. Numeric range and overflow checks remain incomplete. |
+| Initial threshold | It still uses blocking `scanf()` before the event loop. Buttons are not processed during that wait. Mixing this buffered input with later `read()` calls also needs to be resolved. The threshold does not share the temperature buffer's five-byte limit. |
+| Event ordering | One GPIO event is read per iteration. Stdin is processed first if both sources are ready; shutdown has no guaranteed priority over pending work. |
+| Terminal display | Refreshing after a GPIO event can erase the visible echo of an unfinished temperature without removing it from pending input. The interface is not yet a persistent dashboard. |
+| Error recovery | Invalid conversion currently ends the application. Interrupted calls have no dedicated retry policy; threshold arithmetic is not protected against integer overflow. |
+
+Normal keyboard and button behavior has been reported working during development. This does not establish that the cases listed above are handled. These limitations describe the current implementation and will be revised as fixes are added.
+
+## Roadmap
+
+1. **Harden embedded control:** safe line lengths, complete signed input validation, threshold entry through the event loop, debounce, and predictable shutdown.
+2. **Acquire real data:** integrate the kit DHT11 and photoresistor/ADC for temperature, humidity, and relative light measurements; add PIR motion events and record timestamped datasets with reproducible sampling and logging.
+3. **Develop models:** build and evaluate Keras pipelines for environmental anomalies and camera-based recognition.
+4. **Deploy locally:** adapt selected models to the target device and measure accuracy, latency, and resource use.
+5. **Integrate the applications:** connect acquisition, inference, hardware actions, and the planned security notifications.
+
+## Development history
+
+This section grows with the project: functional commits add their capabilities here, update the current status, and remove limitations only when the corresponding fix has been implemented and checked. Future goals remain in the roadmap.
+
+### Event-driven Control Center
+
+The event-driven Control Center combines shared keyboard/GPIO polling, GPIO18 shutdown, GPIO19 manual LED toggle, temperature-line accumulation, terminal refresh, and common cleanup. The current hysteresis band is `threshold +/- 1`.
