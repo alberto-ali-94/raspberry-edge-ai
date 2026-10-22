@@ -14,12 +14,10 @@ int main(void) {
         struct gpio_v2_line_event event = {0};
         struct pollfd fds[2] = {0};
         int fd_controller, desired_state, result;
-        char buf[5];
+        input_state input = {0};
         ssize_t n;
-        size_t ctr;
-        size_t used = 0;
-        int flg = 0;
         int num_lines = 3;
+        int threshold_ready = 0;
         //GPIO 17: LED
         //GPIO 18: EXIT_BUTTON
         //GPIO 19: ALERT_BUTTON
@@ -27,6 +25,8 @@ int main(void) {
         int led_state = 0;
         int exit_status = 0;
 
+        //set up of input structure
+        init_input(&input);
 
         //configuration of expection to handle the input
         request.config.flags = 
@@ -54,51 +54,61 @@ int main(void) {
         fds[1].events = POLLIN;
 
         print_menu();
-
         printf("Enter the threshold: ");
-        if (read_integer(&threshold) != 1){
-                printf("Input error!\n");
-                exit_status = 1;
-                goto closing;
-        }
-        
+        fflush(stdout);
         while(1){
-                printf("Enter the temperature or press any button:\n");
                 result = poll(fds, 2, -1);
                 if(result == -1){
                         perror("Poll error");
                         exit_status = 1;
                         goto closing;
                 }
-                clear_screen();
-                //*******************STDIN branch*******************
-                if(fds[0].revents & POLLERR){
-                        printf("Error on File Descriptor [%d]\n", fds[0].fd);
-                        exit_status = 1;
-                        goto closing;
-                }else if(fds[0].revents & POLLNVAL){
-                        printf("Errore: File Descriptor [%d] not open\n", fds[0].fd);
-                        exit_status = 1;
-                        goto closing;
-                }else if((fds[0].revents & POLLIN)){
-                        n = read(0, &buf[used], sizeof(buf)-used-1);
-                        if(n > 0){
-                                used += n;
-                                buf[used] = '\0';
-                                ctr = 0;
-                                while(ctr < used){
-                                        if(buf[ctr] == '\n'){
-                                                flg = 1;
-                                        }
-                                        ctr++;
-                                }
-                                if(flg){
-                                        // Temperature and LED control
-                                        temperature = str_to_int(buf);
-                                        if(temperature == -1){
-                                                exit_status = 3;
-                                                goto closing;
-                                        }
+  //*******************         STDIN branch            *******************
+                if(threshold_ready == 0){
+                        if(fds[0].revents & POLLERR){
+                                printf("Cannot read keyboard input: error on stdin (fd %d). Shutting down.\n", fds[0].fd);
+                                exit_status = 1;
+                                goto closing;
+                        }
+                        // stdin is not a valid open descriptor: report the error and shut down.
+                        else if(fds[0].revents & POLLNVAL){
+                                printf("Cannot read keyboard input: stdin (fd %d) is not open. Shutting down.\n", fds[0].fd);
+                                exit_status = 1;
+                                goto closing;
+                        }
+                        // stdin is ready to read: append bytes after those already stored in buf.
+                        else if(fds[0].revents & POLLIN){
+                                result = read_input(&input, &threshold);
+                                if(result == -1){
+                                        exit_status = 1;
+                                        goto closing;
+                                }else if (result == 1){
+                                        threshold_ready = 1;
+                                        printf("Enter the temperature or press any button:\n");
+                                }     
+                        }else if(fds[0].revents & POLLHUP){
+                                printf("Keyboard input disconnected. Shutting down.\n");
+                                exit_status = 1;
+                                goto closing;
+                        }
+                }else{
+                        clear_screen();                     
+                        if(fds[0].revents & POLLERR){
+                                printf("Cannot read keyboard input: error on stdin (fd %d). Shutting down.\n", fds[0].fd);
+                                exit_status = 1;
+                                goto closing;
+                        }
+                        // stdin is not a valid open descriptor: report the error and shut down.
+                        else if(fds[0].revents & POLLNVAL){
+                                printf("Cannot read keyboard input: stdin (fd %d) is not open. Shutting down.\n", fds[0].fd);
+                                exit_status = 1;
+                                goto closing;
+                        }
+                        // stdin is ready to read: append bytes after those already stored in buf.
+                        else if(fds[0].revents & POLLIN){
+                                // read the STDIN with buffer logic and convert into (int)temperature
+                                result = read_input(&input, &temperature);
+                                if(result == 1){
                                         desired_state = update_alarm(temperature, threshold+1,threshold-1,led_state);
                                         if(desired_state != led_state){
                                                 result=controller_lines_action(request.fd, &values,desired_state,1,GPIO_V2_LINE_SET_VALUES_IOCTL);
@@ -119,31 +129,21 @@ int main(void) {
                                         }else{
                                                 printf("ALARM: Inactive\n");
                                         }
-                                        used=0;
-                                        flg=0;
-                                } else {
-                                        printf("\nNo newline in this block\n");
-                                        printf("Current lenght: %zu\n",used);
-                                }           
+                                        printf("Enter the temperature or press any button:\n");
+                                }else if(result == -1){
+                                        exit_status = 1;
+                                        goto closing;
+                                }
                         }
-                if(n == -1){
-                        perror("Error in read()");
-                        exit_status = 1;
-                        goto closing;
-                }
-                if(n == 0){
-                        printf("No input received from STDIN. Closing\n");
-                        exit_status = 0;
-                        goto closing;
-                }
-                }else if(fds[0].revents & POLLHUP){
-                        printf("Error: End of input");
-                        exit_status = 1;
-                        goto closing;
-                }
-
+                        // If no earlier stdin branch applies, handle a disconnected input stream by shutting down.
+                        else if(fds[0].revents & POLLHUP){
+                                printf("Keyboard input disconnected. Shutting down.\n");
+                                exit_status = 1;
+                                goto closing;
+                        }
+                }       
                 
-                //*******************GPIO branch*******************
+//*******************           GPIO branch             *******************
                 if(fds[1].revents & POLLERR){
                         printf("Error on File Descriptor [%d]\n",fds[1].fd);
                         exit_status = 1;
@@ -194,11 +194,7 @@ int main(void) {
                 }
                 
         }
-        /*if(used >= (sizeof(buf)-1)){
-                printf("Buffer limit reached!\n");
-                exit_status = 1;
-                goto closing;
-        }*/
+
 
 
         closing:

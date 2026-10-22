@@ -56,7 +56,8 @@ The current development milestone is a **Hardware Control Center** written in C.
 | Modular C application and Make-based build | Implemented |
 | LED control from manually entered temperatures | Implemented |
 | Keyboard and GPIO button handling with `poll()` | Implemented |
-| Robust signed input and button debounce | Incomplete |
+| Shared event-driven threshold/temperature input, signed values, and oversized-line recovery | Implemented for interactive terminal input |
+| Numeric range checks and button debounce | Incomplete |
 | Python/Keras practice notebooks | Included as standalone exercises |
 | Physical sensor acquisition and dataset logging | Planned |
 | Integrated on-device inference | Planned |
@@ -67,12 +68,15 @@ The notebooks are learning resources, not an inference pipeline connected to the
 ## Current capabilities
 
 - Accept an integer threshold and manually entered temperature readings.
-- Monitor standard input and GPIO button events through one `poll()` call after the initial threshold prompt.
-- Preserve partial temperature input across reads and accept successive newline-terminated readings.
+- Monitor standard input and GPIO button events through one `poll()` call, including while waiting for the initial threshold.
+- Reuse one stateful input reader for threshold and temperature entry, preserving partial lines across reads.
+- Accept signed decimal integers, including `-1`, within a three-character line limit before Enter.
+- Reject empty input, nonnumeric input, and characters between the number and newline; keep running so the user can retry.
+- Reject oversized lines and discard their remaining characters through the newline before accepting another interactive line.
 - Drive an LED on GPIO17 with hysteresis: turn on above `threshold + 1`, turn off at or below `threshold - 1`, and retain the current state between those boundaries.
-- Toggle the LED manually with GPIO19, including while waiting for a temperature.
+- Toggle the LED manually with GPIO19 while waiting for either the threshold or a temperature.
 - Shut down with GPIO18, attempting to turn the LED off and release the GPIO request and controller.
-- Report the temperature comparison and alarm state, refreshing the visible terminal area when an event arrives.
+- Report the temperature comparison and alarm state; after threshold entry, refresh the visible terminal area when an event arrives.
 
 ### Current hardware controls
 
@@ -107,7 +111,11 @@ make
 
 The Makefile compiles `main.c`, `io.c`, `temperature.c`, and `gpio.c`, then links `control_center`. It enables C11 and `-Wall -Wextra -Wpedantic`. Use `make -B` to force a complete rebuild.
 
-Enter the threshold first, then one temperature per line. For the ordinary input path, use one to three decimal digits. GPIO19 toggles the LED; GPIO18 exits. Button handling starts after threshold entry.
+Enter the threshold first, then one temperature per line. Both use the same five-byte buffer: at most three characters before Enter, followed by a newline and string terminator. An optional `+` or `-` sign counts toward the limit: `123`, `-12`, `+25`, `0`, and `-1` fit; `1234` and `-123` are rejected.
+
+The input policy rejects an invalid line as a whole: it never accepts a numeric prefix as a replacement for that line. For example, `12x` is rejected because it contains an unexpected suffix; `123x` and `1234` are rejected because they exceed the three-character limit. This length limit is an intentional design choice. Oversized lines are discarded through their newline, and the next interactive line can be read normally without a false EOF or shutdown. Invalid input leaves the current value and LED state unchanged. A rejected threshold keeps the application in threshold-entry mode. GPIO19 toggles the LED and GPIO18 exits during either input phase. Use an interactive terminal and submit one line at a time; arbitrary piped or redirected input is not yet supported reliably.
+
+End-of-input (for example, Ctrl+D at an empty terminal input line) and read errors trigger cleanup and shutdown. Both currently produce a nonzero application exit status.
 
 For example, with threshold `30` and the LED initially off:
 
@@ -129,7 +137,7 @@ The paths below are tracked by Git and are part of the project's shared files.
 | Path | Purpose |
 |---|---|
 | `main.c` | Application entry point, event loop, temperature logic, button actions, and cleanup |
-| `io.c` / `io.h` | Menu, input conversion, threshold input, and terminal display helpers |
+| `io.c` / `io.h` | Menu, `input_state` structure, shared `init_input()` / `read_input()` reader, integer conversion, and terminal display helpers |
 | `temperature.c` / `temperature.h` | Threshold comparison and hysteresis |
 | `gpio.c` / `gpio.h` | GPIO controller access, line requests, values, and descriptor cleanup |
 | `Makefile` | Main application build |
@@ -140,28 +148,18 @@ The paths below are tracked by Git and are part of the project's shared files.
 | Area | Current limitation |
 |---|---|
 | Button debounce | Contact bounce can generate several events for one press, causing repeated toggles. Falling-edge detection alone does not filter bounce. |
-| Four-digit temperatures | The 5-byte buffer allows three digit characters, a newline, and a string terminator. `1234` followed by Enter can fill it without consuming the newline; a later zero-length read may be mistaken for EOF and cause shutdown. Oversized lines are not recovered correctly. |
-| Negative temperatures | Short values such as `-5` or `-12` fit, but `-123` plus newline does not. A valid `-1` is confused with the parser's error return value. Signed input is not supported consistently. |
-| Complete-line validation | Trailing characters are not rejected reliably: `12x` can be converted to `12`. Numeric range and overflow checks remain incomplete. |
-| Initial threshold | It still uses blocking `scanf()` before the event loop. Buttons are not processed during that wait. Mixing this buffered input with later `read()` calls also needs to be resolved. The threshold does not share the temperature buffer's five-byte limit. |
+| Multiple lines per read | The reader treats each accumulated buffer as one line. If a read contains a newline followed by part of another line, the remaining characters are not preserved correctly. Piped or redirected input and input batching require further work. |
+| Numeric range | The parser does not check `strtol()` overflow or the range before casting to `int`. The current three-character limit keeps ordinary decimal keyboard values within range on the target, but the parser is not ready for unrestricted longer strings. Threshold arithmetic is not independently protected against integer overflow. |
 | Event ordering | One GPIO event is read per iteration. Stdin is processed first if both sources are ready; shutdown has no guaranteed priority over pending work. |
-| Terminal display | Refreshing after a GPIO event can erase the visible echo of an unfinished temperature without removing it from pending input. The interface is not yet a persistent dashboard. |
-| Error recovery | Invalid conversion currently ends the application. Interrupted calls have no dedicated retry policy; threshold arithmetic is not protected against integer overflow. |
+| Terminal display | After threshold entry, a GPIO event can erase the visible echo of unfinished input without removing it from pending input. Prompts are not consistently redisplayed after rejected lines or button events. The interface is not yet a persistent dashboard. |
+| I/O errors and EOF | Interrupted calls have no dedicated retry policy. EOF and read errors share the same reader result and both cause a nonzero exit status. |
 
-Normal keyboard and button behavior has been reported working during development. This does not establish that the cases listed above are handled. These limitations describe the current implementation and will be revised as fixes are added.
+Interactive operation has been reported working on the Raspberry Pi during development. Targeted local checks also covered valid signed input, rejected suffixes, partial-line accumulation, oversized-line recovery, a subsequent valid line, and EOF. These checks do not establish general support for arbitrary byte streams or verify button debounce.
 
 ## Roadmap
 
-1. **Harden embedded control:** safe line lengths, complete signed input validation, threshold entry through the event loop, debounce, and predictable shutdown.
+1. **Harden embedded control:** finish numeric range checks, support multiple input lines per read, add debounce, improve terminal prompts, and make shutdown/event handling more predictable.
 2. **Acquire real data:** integrate the kit DHT11 and photoresistor/ADC for temperature, humidity, and relative light measurements; add PIR motion events and record timestamped datasets with reproducible sampling and logging.
 3. **Develop models:** build and evaluate Keras pipelines for environmental anomalies and camera-based recognition.
 4. **Deploy locally:** adapt selected models to the target device and measure accuracy, latency, and resource use.
 5. **Integrate the applications:** connect acquisition, inference, hardware actions, and the planned security notifications.
-
-## Development history
-
-This section grows with the project: functional commits add their capabilities here, update the current status, and remove limitations only when the corresponding fix has been implemented and checked. Future goals remain in the roadmap.
-
-### Event-driven Control Center
-
-The event-driven Control Center combines shared keyboard/GPIO polling, GPIO18 shutdown, GPIO19 manual LED toggle, temperature-line accumulation, terminal refresh, and common cleanup. The current hysteresis band is `threshold +/- 1`.
