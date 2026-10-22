@@ -86,6 +86,10 @@ The notebooks are learning resources, not an inference pipeline connected to the
 | GPIO18 | Button to ground, internal pull-up | Orderly shutdown |
 | GPIO19 | Button to ground, internal pull-up | Invert the LED state |
 
+![Control Center circuit schematic: GPIO17 drives an LED through a 10 kΩ resistor; GPIO18 and GPIO19 connect normally open buttons to common ground, with internal pull-ups.](docs/images/control-center-circuit.svg)
+
+Electrical schematic for the current circuit. The dashed pull-ups are internal to the Raspberry Pi and enabled by software; solid lines show external wiring. `A` and `K` identify the LED anode and cathode. This schematic shows electrical connections, not breadboard positions.
+
 GPIO numbers are offsets within the selected controller, not physical header pin numbers. The current controller path is `/dev/gpiochip0`; verify it for the board being used.
 
 Button events use falling-edge detection without `ACTIVE_LOW`: pressing a button changes its input from high to low. Debouncing is not yet implemented.
