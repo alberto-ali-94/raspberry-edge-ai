@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
+#include <limits.h>
 
 void print_menu(void){
     printf("========================================\n");
@@ -86,7 +88,12 @@ int str_to_int(char *str, int *result){
     long i;
     char *eob;
 
+    errno = 0;
     i = strtol(str, &eob, 10);
+    if(errno == ERANGE){
+        printf("Number outside the range of long.\n");
+        return -1;
+    }
     // Compare the two pointers: if they point to the same byte, eob did not move and no conversion occurred.
     if (str == eob){ 
         printf("No Number found!\n");
@@ -95,7 +102,11 @@ int str_to_int(char *str, int *result){
        printf("Invalid temperature: unexpected character after the number.\n");
        return -1; 
     }
-    else {
+    else if(i < INT_MIN || i > INT_MAX){
+        printf("Can't convert the input in int variable\n");
+        return -1;
+    }  
+    else{
         *result = (int)i;
         return 0;
     }

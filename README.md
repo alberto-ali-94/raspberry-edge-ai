@@ -57,7 +57,8 @@ The current development milestone is a **Hardware Control Center** written in C.
 | LED control from manually entered temperatures | Implemented |
 | Keyboard and GPIO button handling with `poll()` | Implemented |
 | Shared event-driven threshold/temperature input, signed values, and oversized-line recovery | Implemented for interactive terminal input |
-| Numeric range checks and button debounce | Incomplete |
+| Numeric range checks in the reusable parser | Implemented |
+| Kernel-managed button debounce (30 ms) | Implemented |
 | Python/Keras practice notebooks | Included as standalone exercises |
 | Physical sensor acquisition and dataset logging | Planned |
 | Integrated on-device inference | Planned |
@@ -73,6 +74,8 @@ The notebooks are learning resources, not an inference pipeline connected to the
 - Accept signed decimal integers, including `-1`, within a three-character line limit before Enter.
 - Reject empty input, nonnumeric input, and characters between the number and newline; keep running so the user can retry.
 - Reject oversized lines and discard their remaining characters through the newline before accepting another interactive line.
+- Check `strtol()` range errors and reject values outside `INT_MIN`–`INT_MAX` before converting to `int`, preserving the destination on failure.
+- Request a 30 ms debounce filter for both GPIO buttons through the Linux GPIO v2 API.
 - Drive an LED on GPIO17 with hysteresis: turn on above `threshold + 1`, turn off at or below `threshold - 1`, and retain the current state between those boundaries.
 - Toggle the LED manually with GPIO19 while waiting for either the threshold or a temperature.
 - Shut down with GPIO18, attempting to turn the LED off and release the GPIO request and controller.
@@ -92,7 +95,9 @@ Electrical schematic for the current circuit. The dashed pull-ups are internal t
 
 GPIO numbers are offsets within the selected controller, not physical header pin numbers. The current controller path is `/dev/gpiochip0`; verify it for the board being used.
 
-Button events use falling-edge detection without `ACTIVE_LOW`: pressing a button changes its input from high to low. Debouncing is not yet implemented.
+Button events use falling-edge detection without `ACTIVE_LOW`: pressing a button changes its input from high to low. Both inputs request a **30 ms debounce period** (`30000` microseconds). A separate GPIO v2 configuration attribute applies the filter only to GPIO18 and GPIO19; GPIO17 remains an output. Linux can emulate debounce in software when hardware debounce is unavailable. The application checks GPIO request failure before entering the event loop.
+
+Button behavior has been tested on the Raspberry Pi: one action per press, with no additional LED toggle while held or on release.
 
 The manual button changes the actual LED state. Subsequent valid temperatures apply hysteresis to that state, so a reading inside the hysteresis band preserves the manual result.
 
@@ -118,6 +123,8 @@ The Makefile compiles `main.c`, `io.c`, `temperature.c`, and `gpio.c`, then link
 Enter the threshold first, then one temperature per line. Both use the same five-byte buffer: at most three characters before Enter, followed by a newline and string terminator. An optional `+` or `-` sign counts toward the limit: `123`, `-12`, `+25`, `0`, and `-1` fit; `1234` and `-123` are rejected.
 
 The input policy rejects an invalid line as a whole: it never accepts a numeric prefix as a replacement for that line. For example, `12x` is rejected because it contains an unexpected suffix; `123x` and `1234` are rejected because they exceed the three-character limit. This length limit is an intentional design choice. Oversized lines are discarded through their newline, and the next interactive line can be read normally without a false EOF or shutdown. Invalid input leaves the current value and LED state unchanged. A rejected threshold keeps the application in threshold-entry mode. GPIO19 toggles the LED and GPIO18 exits during either input phase. Use an interactive terminal and submit one line at a time; arbitrary piped or redirected input is not yet supported reliably.
+
+The reusable integer parser resets `errno` before `strtol()`, rejects `ERANGE`, and checks `INT_MIN` / `INT_MAX` before the cast and output assignment. A return value of `0` means success; `-1` means rejection with the destination unchanged. These checks use standard C headers (`<errno.h>` and `<limits.h>`) and require no additional library dependency. The interactive three-character policy remains unchanged.
 
 End-of-input (for example, Ctrl+D at an empty terminal input line) and read errors trigger cleanup and shutdown. Both currently produce a nonzero application exit status.
 
@@ -151,18 +158,18 @@ The paths below are tracked by Git and are part of the project's shared files.
 
 | Area | Current limitation |
 |---|---|
-| Button debounce | Contact bounce can generate several events for one press, causing repeated toggles. Falling-edge detection alone does not filter bounce. |
+| Short button presses | The 30 ms debounce filter can suppress presses that do not remain stable for the configured period. |
 | Multiple lines per read | The reader treats each accumulated buffer as one line. If a read contains a newline followed by part of another line, the remaining characters are not preserved correctly. Piped or redirected input and input batching require further work. |
-| Numeric range | The parser does not check `strtol()` overflow or the range before casting to `int`. The current three-character limit keeps ordinary decimal keyboard values within range on the target, but the parser is not ready for unrestricted longer strings. Threshold arithmetic is not independently protected against integer overflow. |
+| Threshold arithmetic | The parser checks `long` and `int` ranges, but subsequent `threshold + 1` / `threshold - 1` arithmetic is not independently protected against integer overflow. The intentional three-character interactive limit keeps threshold values away from these extremes on the target. |
 | Event ordering | One GPIO event is read per iteration. Stdin is processed first if both sources are ready; shutdown has no guaranteed priority over pending work. |
 | Terminal display | After threshold entry, a GPIO event can erase the visible echo of unfinished input without removing it from pending input. Prompts are not consistently redisplayed after rejected lines or button events. The interface is not yet a persistent dashboard. |
 | I/O errors and EOF | Interrupted calls have no dedicated retry policy. EOF and read errors share the same reader result and both cause a nonzero exit status. |
 
-Interactive operation has been reported working on the Raspberry Pi during development. Targeted local checks also covered valid signed input, rejected suffixes, partial-line accumulation, oversized-line recovery, a subsequent valid line, and EOF. These checks do not establish general support for arbitrary byte streams or verify button debounce.
+The latest application changes have been tested successfully on the Raspberry Pi, including interactive keyboard input, debounced button operation, and button-triggered shutdown. Targeted local checks covered valid signed input, rejected suffixes, partial-line accumulation, oversized-line recovery, a subsequent valid line, and EOF. Direct parser checks also passed 14 cases, including `INT_MIN`, `INT_MAX`, values just outside the `int` range, `long` overflow/underflow, and unchanged output on rejection. Range tests call the parser directly because the interactive buffer deliberately limits input length. These checks do not establish general support for arbitrary byte streams.
 
 ## Roadmap
 
-1. **Harden embedded control:** finish numeric range checks, support multiple input lines per read, add debounce, improve terminal prompts, and make shutdown/event handling more predictable.
+1. **Harden embedded control:** support multiple input lines per read, protect threshold arithmetic independently of the input length policy, improve terminal prompts, and make shutdown/event handling more predictable.
 2. **Acquire real data:** integrate the kit DHT11 and photoresistor/ADC for temperature, humidity, and relative light measurements; add PIR motion events and record timestamped datasets with reproducible sampling and logging.
 3. **Develop models:** build and evaluate Keras pipelines for environmental anomalies and camera-based recognition.
 4. **Deploy locally:** adapt selected models to the target device and measure accuracy, latency, and resource use.

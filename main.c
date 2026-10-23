@@ -35,10 +35,14 @@ int main(void) {
         GPIO_V2_LINE_FLAG_EDGE_FALLING; // Trigger an event when the GPIO changes from high to low.
 
         //Number of extra configuration attributes attached to the line
-        request.config.num_attrs=1;
+        request.config.num_attrs=2;
 	request.config.attrs[0].attr.id = GPIO_V2_LINE_ATTR_ID_FLAGS;
 	request.config.attrs[0].attr.flags = GPIO_V2_LINE_FLAG_OUTPUT;
 	request.config.attrs[0].mask = 1; //first element in the array "lines"
+        // set up debounce of buttons at 30 ms
+        request.config.attrs[1].attr.id = GPIO_V2_LINE_ATTR_ID_DEBOUNCE;
+        request.config.attrs[1].attr.debounce_period_us = 30000; //micro seconds = 30 ms
+        request.config.attrs[1].mask = 6;
 
 
         fd_controller = GPIO_CONNECTION(&info, &request,lines,num_lines);
