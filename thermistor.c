@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <math.h>
 #include "thermistor.h"
 
 int read_adc(int fd, uint8_t *raw){
@@ -12,9 +13,7 @@ int read_adc(int fd, uint8_t *raw){
     if (written == -1){
         perror("Error in writing control byte");
         return -1;
-    } else if (written == 1){
-        printf("Control byte transferred successfully\n");
-    } else {
+    } else if (written != 1){
         printf("Control byte not transferred\n");
         return -1;
     }
@@ -29,4 +28,21 @@ int read_adc(int fd, uint8_t *raw){
     }
     *raw = local_raw[1]; 
     return 0;    
+}
+
+
+int adc_to_celsius(uint8_t raw, double *celsius){
+    double local_celsius, voltage, Rt, kelvin;
+
+    voltage = raw / 256.0 * 3.3;
+    if ((voltage <= 0.0) || (voltage >= 3.3)){
+            printf("Error! Voltage out of ranges");
+            return -1;
+    }
+    Rt = 10 * voltage / (3.3 - voltage);
+    kelvin = 1/(1/(273.15 + 25) + log(Rt/10)/3950.0);
+    local_celsius = kelvin - 273.15;
+    *celsius = local_celsius;
+    return 0;
+
 }
