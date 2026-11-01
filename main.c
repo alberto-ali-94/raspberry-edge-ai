@@ -144,7 +144,7 @@ void *temp_reader(void *arg){
 worker_error:
     fprintf(stderr, "[Thread] Error code: %d\n", worker_error_code);
     if (error_detail != 0) fprintf(stderr, "[Thread] Cause: %s\n", strerror(error_detail));
-    // Questo percorso viene raggiunto soltanto senza possedere il mutex.
+    // This path is reached only when the mutex is not held.
     rc = pthread_mutex_lock(&local_arg->mutex);
     if (rc != 0){
         worker_error_code = 68;
@@ -159,7 +159,7 @@ worker_error:
     return NULL;
 
 synchronization_error:
-    // Non tentare di pubblicare dati usando una sincronizzazione inaffidabile.
+    // Do not publish data using unreliable synchronization.
     fprintf(stderr, "[Thread] Synchronization error %d: %s\n", worker_error_code, strerror(rc));
     _Exit(worker_error_code);
 }
@@ -187,7 +187,7 @@ int main(){
     pthread_condattr_t attributes;
     pthread_t worker;
     int worker_started = 0;
-    // Flags di esistenza: non sono primitive di sincronizzazione.
+    // Resource initialization flags: these are not synchronization primitives.
     int mutex_ready = 0;
     int condition_ready = 0;
     int attributes_ready = 0;
@@ -349,16 +349,16 @@ int main(){
     fflush(stdout);
 
     while(1){
-        // Azzera anche gli eventi dei descrittori esclusi da questo giro.
+        // Also clear events for descriptors excluded from this iteration.
         for (int i = 0; i < 3; ++i){
             fds[i].revents = 0;
         }
         if(threshold_ready){
-            // Dopo la soglia: GPIO e pipe, negli elementi originali 1 e 2.
+            // After threshold entry: GPIO and pipe, in original elements 1 and 2.
             //ready = poll(&fds[1], 2, 1500);
             ready = poll(&fds[1], 2, -1);
         } else {
-            // Prima della soglia: tastiera, GPIO e pipe.
+            // Before threshold entry: keyboard, GPIO, and pipe.
             //ready = poll(fds, 3, 1500);
             ready = poll(fds, 3, -1);
         }
@@ -372,7 +372,7 @@ int main(){
             goto closing;
         }
 
-        // La causa del worker viene copiata sotto mutex prima di decidere l'uscita.
+        // Copy the worker error under the mutex before deciding whether to exit.
         rc = pthread_mutex_lock(&args.mutex);
         if (rc != 0){
             fprintf(stderr, "Main could not lock shared state; process shutdown required: %s\n", strerror(rc));
@@ -393,7 +393,7 @@ int main(){
             goto closing;
         }
 
-        //gestione pulsanti
+        //Button handling
         //gpio branch
         if(fds[1].revents & POLLERR){
             fprintf(stderr, "GPIO descriptor reported POLLERR\n");
@@ -403,7 +403,7 @@ int main(){
             fprintf(stderr, "GPIO descriptor reported POLLNVAL\n");
             exit_value = 34;
             goto closing;
-        }else if(fds[1].revents & POLLIN){ //evento arrivato in ingresso su gpio
+        }else if(fds[1].revents & POLLIN){ //Incoming GPIO event
             do {
                 n = read(request.fd, &event, sizeof(event));
             } while (n == -1 && errno == EINTR);
@@ -412,13 +412,13 @@ int main(){
                 exit_value = 35;
                 goto closing;
             }   
-            if(n == (ssize_t)sizeof(event)){ //lettura completa da gpio
-                //acquisizione mutex e settagio di condizione di uscita thread
-                if((event.offset == 24) && (event.id == GPIO_V2_LINE_EVENT_FALLING_EDGE)){ //lettura da exit button GPIO 24
+            if(n == (ssize_t)sizeof(event)){ //Complete GPIO event read
+                //Acquire the mutex and set the thread exit condition
+                if((event.offset == 24) && (event.id == GPIO_V2_LINE_EVENT_FALLING_EDGE)){ //Read from the exit button on GPIO24
                         exit_value = 0;
                         goto closing;
                 }
-                //lettura da alert button GPIO 23 - accensione/spegnimento manuale
+                //Read from the alert button on GPIO23 - manually switch the LED on or off
                 if((event.offset == 23) && (event.id == GPIO_V2_LINE_EVENT_FALLING_EDGE)){
                     led_state = !led_state;
                     rc=controller_lines_action(request.fd, &values,led_state,1,GPIO_V2_LINE_SET_VALUES_IOCTL);
@@ -428,14 +428,14 @@ int main(){
                             goto closing;
                     }
                     desired_state = led_state;
-                    //accensione/spegnimento manuale del led
+                    //Manually switch the LED on or off
                     if(led_state){
                         printf("ALARM: Manually activated\n");
                     }else{
                         printf("ALARM: Manually deactivated\n");
                     }     
                 }
-            } else { //lettura incompleta da gpio
+            } else { //Incomplete GPIO event read
                 fprintf(stderr, "[E036] GPIO event: received %zd bytes, expected %zu\n", n, sizeof event);
                 exit_value = 36;
                 goto closing;
@@ -477,7 +477,7 @@ int main(){
             }
         }
 
-        // Consuma gli avvisi anche prima della soglia; il LED automatico attende la soglia.
+        // Consume notifications even before threshold entry; automatic LED control waits for the threshold.
         //pipeline branch
         if(fds[2].revents & POLLERR){
             fprintf(stderr, "Notification pipe reported POLLERR\n");
@@ -489,13 +489,13 @@ int main(){
                 exit_value = 44;
                 goto closing;
         }
-        // Anche con HUP possono restare avvisi: leggili prima di riconoscere EOF.
-        // Una lettura per giro mantiene limitato il lavoro dedicato alla pipe.
+        // Notifications may remain even with HUP: read them before recognizing EOF.
+        // One read per iteration limits the work spent on the pipe.
         else if(fds[2].revents & (POLLIN | POLLHUP)){
             do {
                 n = read(pipe_fd[0], &notification, sizeof(notification));
             } while (n == -1 && errno == EINTR);
-            //dati disponibili in pipeline
+            //Data available in the pipe
             if (n>0){
                 rc=pthread_mutex_lock(&(args.mutex));
                 if(rc != 0){
@@ -512,7 +512,7 @@ int main(){
                     fprintf(stderr, "Main could not unlock shared state; process shutdown required: %s\n", strerror(rc));
                     return 49;
                 }
-                //nuova lettura, controllare lo stato del LED e cambiarlo se necessario
+                //New sample: check the LED state and change it if necessary
                 if(threshold_ready && new_sequence){
                     desired_state = update_alarm(snapshot.temperature, (double)threshold,(double)threshold,led_state);
                     if(desired_state != led_state){
@@ -538,7 +538,7 @@ int main(){
                 }
                 new_sequence = 0;              
             } 
-            //nessun avviso disponibile, situazione normale
+            //No notification available; this is normal
             else if (n == -1 && ((errno == EAGAIN)|| (errno == EWOULDBLOCK))){
                 printf("[MAIN] No new reading available from the worker\n");
             } else if (n == 0){
@@ -574,15 +574,15 @@ int main(){
             rc = pthread_join(worker, &worker_result);
             if (rc != 0){
                 fprintf(stderr, "Joining worker failed; worker termination is not confirmed: %s\n", strerror(rc));
-                // La terminazione del worker non e' confermata: niente distruzioni.
+                // Worker termination is not confirmed: do not destroy resources.
                 return exit_value != 0 ? exit_value : 83;
             }
             worker_started = 0;
             if (worker_result != &args){
-                // Dopo join il worker e' terminato: lettura senza mutex consentita.
+                // After join, the worker has terminated: reading without the mutex is allowed.
                 worker_error_code = args.error_exit != 0 ? args.error_exit : 84;
                 fprintf(stderr, "[Main] Worker error code: %d\n", worker_error_code);
-                // Se il timeout ha solo rivelato il guasto, conserva la vera causa.
+                // If the timeout only revealed the failure, preserve the actual cause.
                 if (exit_value == 0 || exit_value == 2){
                     exit_value = worker_error_code;
                 }
@@ -617,7 +617,7 @@ int main(){
             }
         }
 
-        // Non riprovare close: su Linux il descrittore puo' essere gia' rilasciato.
+        // Do not retry close: on Linux, the descriptor may already have been released.
         for (int i = 0; i < 2; ++i){
             if (pipe_fd[i] != -1){
                 if (close(pipe_fd[i]) == -1){

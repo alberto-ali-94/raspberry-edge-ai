@@ -36,7 +36,7 @@ int read_input(input_state *state, int *output){
             (*state).buf[(*state).used] = '\0';
 
             if(flg && !(*state).discarding){
-                // Ramo ok: l'input è andato a buon fine, non devo fare altro e posso uscire dalla funzione 
+                // Success branch: input was received successfully; no further action is needed before returning 
                 exit_state = str_to_int((*state).buf, output);
                 if (exit_state == -1){
                     (*state).used = 0;
