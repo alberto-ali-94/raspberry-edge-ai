@@ -353,16 +353,8 @@ int main(){
         for (int i = 0; i < 3; ++i){
             fds[i].revents = 0;
         }
-        if(threshold_ready){
-            // After threshold entry: GPIO and pipe, in original elements 1 and 2.
-            //ready = poll(&fds[1], 2, 1500);
-            ready = poll(&fds[1], 2, -1);
-        } else {
-            // Before threshold entry: keyboard, GPIO, and pipe.
-            //ready = poll(fds, 3, 1500);
-            ready = poll(fds, 3, -1);
-        }
-        
+
+        ready = poll(fds, 3, -1);
         if (ready == -1 && errno == EINTR){
             continue;
         }
@@ -446,35 +438,33 @@ int main(){
             goto closing;
         }
 
-        //Read threshold
-        if(!threshold_ready){     
-            // stdin is not a valid open descriptor: report the error and shut down.
-            
-            if(fds[0].revents & POLLERR){
-                fprintf(stderr, "Keyboard descriptor reported POLLERR\n");
-                exit_value = 39;
-                goto closing;  
-            }else if(fds[0].revents & POLLNVAL){
-                    fprintf(stderr, "Keyboard descriptor reported POLLNVAL\n");
-                    exit_value = 40;
-                    goto closing;
-            }
-            // stdin is ready to read: append bytes after those already stored in buf.
-            else if(fds[0].revents & POLLIN){
-                rc = read_input(&input, &threshold);
-                if(rc == -1){
-                        fprintf(stderr, "Keyboard read failed or reached EOF; see input diagnostic\n");
-                        exit_value = 41;
-                        goto closing;
-                }else if (rc == 1){
-                        threshold_ready = 1;
-                }     
-            }
-            else if(fds[0].revents & POLLHUP){
-                fprintf(stderr, "Keyboard disconnected (POLLHUP)\n");
-                exit_value = 42;
+        //Read threshold   
+        // stdin is not a valid open descriptor: report the error and shut down.
+        if(fds[0].revents & POLLERR){
+            fprintf(stderr, "Keyboard descriptor reported POLLERR\n");
+            exit_value = 39;
+            goto closing;  
+        }else if(fds[0].revents & POLLNVAL){
+                fprintf(stderr, "Keyboard descriptor reported POLLNVAL\n");
+                exit_value = 40;
                 goto closing;
-            }
+        }
+        // stdin is ready to read: append bytes after those already stored in buf.
+        else if(fds[0].revents & POLLIN){
+            rc = read_input(&input, &threshold);
+            if(rc == -1){
+                    fprintf(stderr, "Keyboard read failed or reached EOF; see input diagnostic\n");
+                    exit_value = 41;
+                    goto closing;
+            }else if ((rc == 1)){
+                    threshold_ready = 1;
+                    printf("You can enter a new threshold\n");
+            } 
+        }
+        else if(fds[0].revents & POLLHUP){
+            fprintf(stderr, "Keyboard disconnected (POLLHUP)\n");
+            exit_value = 42;
+            goto closing;
         }
 
         // Consume notifications even before threshold entry; automatic LED control waits for the threshold.
