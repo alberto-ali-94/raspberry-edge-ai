@@ -4,7 +4,7 @@ Raspberry Edge AI is a learning project that combines C/C++ embedded control on 
 
 ## Current application: Hardware Control Center
 
-The `control_center` application reads a physical **NTC thermistor through a PCF8591 ADC**, accepts an initial temperature threshold from the keyboard, and controls an LED. Two GPIO buttons provide manual LED control and shutdown.
+The `control_center` application reads a physical **NTC thermistor through a PCF8591 ADC**, accepts a temperature threshold that can be changed from the keyboard during operation, and controls an LED. Two GPIO buttons provide manual LED control and shutdown.
 
 The application uses two threads:
 
@@ -50,9 +50,9 @@ A zero ADC sample is rejected by the conversion guard. A successful I2C transfer
 
 The main thread opens the GPIO and I2C resources, creates a nonblocking notification pipe, initializes the mutex and condition variable, and starts the acquisition worker. The worker can acquire temperatures while the program waits for the initial threshold.
 
-Enter one signed decimal integer threshold and press Enter. The input reader accepts at most **three characters before Enter**, including an optional sign: `25`, `+25`, and `-12` fit. Invalid input is rejected without replacing the current value; oversized lines are discarded through their newline before another line is accepted.
+Enter a signed decimal integer threshold and press Enter. You can enter another threshold at any time while the application is running. The input reader accepts at most **three characters before Enter**, including an optional sign: `25`, `+25`, and `-12` fit. Invalid input is rejected without replacing the current value; oversized lines are discarded through their newline before another line is accepted.
 
-The initial threshold is currently read **once**. After it is accepted, the main thread stops monitoring the keyboard and continues monitoring the GPIO buttons and notification pipe. Changing the threshold during operation is not implemented yet.
+After each valid entry, the threshold is replaced and the application prints an invitation to enter another value. An invalid entry leaves the previous valid threshold in effect. Accepting a threshold does not independently re-evaluate the last processed temperature: the new threshold is applied when the main thread processes the next new sample.
 
 ### Acquisition and event handling
 
@@ -62,7 +62,7 @@ The pipe carries notifications, not temperature records. Shared memory holds onl
 
 After each acquisition and notification, the worker waits **two seconds** using `pthread_cond_timedwait`. Its deadline uses `CLOCK_MONOTONIC`. The pause can be interrupted by a stop request; an I2C operation already in progress is not interrupted by the condition variable. The interval between acquisitions includes processing time as well as the two-second pause, so this is not a fixed-rate or hard real-time sampler.
 
-The main thread uses `poll()` with **no timeout**. Before threshold entry it monitors stdin, GPIO, and the notification pipe; afterward it monitors GPIO and the pipe. It does not shut down merely because no events arrive.
+The main thread uses `poll()` with **no timeout**. It always monitors stdin, GPIO, and the notification pipe, including after a threshold has been accepted. It does not shut down merely because no events arrive.
 
 ### Automatic and manual LED control
 
@@ -85,7 +85,9 @@ For example, with threshold `25`:
 | New sample: 27.0 °C | LED remains on; no repeated automatic state message |
 | Press GPIO23 | LED toggles off immediately |
 | Next new sample: 27.0 °C | LED turns on again |
-| New sample: 25.0 °C | LED off |
+| Enter a new threshold: `30` | Threshold updated; LED state unchanged until the next new sample |
+| Next new sample: 27.0 °C | LED off |
+| Enter invalid input: `abc` | Input rejected; threshold remains `30` |
 | Press GPIO24 | Orderly shutdown requested |
 
 ### Shutdown and errors
@@ -143,14 +145,14 @@ The full application uses Linux-specific GPIO/I2C interfaces and is not a native
 - **Terminal input display:** asynchronous messages can split the visible echo of a line being typed. The program does not redraw the unfinished line. Visual disruption does not by itself prove that input characters were lost.
 - **Interactive input scope:** the reader has a three-character limit and does not reliably preserve multiple lines delivered in one read. Keyboard read errors and EOF share a return value; the keyboard reader does not yet retry interrupted reads. GPIO and notification-pipe reads, notification writes, and `poll()` do handle `EINTR`.
 - **Event ordering:** GPIO handling precedes keyboard and sensor handling, but only one GPIO event is read per iteration. Exit has no guaranteed priority over another GPIO event already ahead of it in the queue. A newly observed sample processed after a toggle in the same iteration can restore automatic control immediately.
-- **Initial threshold:** entering it does not independently reapply a sample already processed before threshold entry; automatic control waits for a new sample update.
+- **Threshold application:** neither the initial threshold nor later changes independently reapply an already processed sample; automatic control waits for a new sample update.
 - **Hardware accuracy:** thermistor acquisition has been reported working on the Raspberry Pi after correcting a zero-sample issue. Calibration against a reference temperature and disconnected-sensor recovery have not been established.
-- **Verification scope:** local isolated checks exercised synchronization, selected error paths, notification reads, and cleanup. They do not replace a complete hardware acceptance test of the latest program.
+- **Verification scope:** runtime threshold changes have been tested on the Raspberry Pi by the student; no detailed output or per-case results were captured for review. The student also reports that a threshold is still accepted after a message visually splits the input line. Local isolated checks exercised synchronization, selected error paths, notification reads, and cleanup. They do not replace a complete hardware acceptance test of the latest program.
 - **Signal shutdown:** Ctrl+C does not use the button's cooperative cleanup path; no application signal handler is installed.
 
 ## Roadmap
 
-1. Allow threshold changes during operation and preserve a readable input line while asynchronous events are displayed.
+1. Preserve a readable input line while asynchronous events are displayed.
 2. Ensure worker failures reliably wake the main event loop and consolidate event ordering and hardware verification.
 3. Extend the environmental station with timestamped logging and additional kit sensors, such as light, humidity, and PIR motion inputs, after checking their hardware and interfaces.
 4. Develop and evaluate Keras models, save reproducible model/preprocessing artifacts, and measure inference feasibility on the target device.
