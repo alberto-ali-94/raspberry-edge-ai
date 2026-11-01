@@ -1,11 +1,11 @@
 #include "temperature.h"
 
-int is_temperature_high(int temperature, int threshold){
+int is_temperature_high(double temperature, double threshold){
     return (temperature>threshold);
 }
 
 int update_alarm(
-    int temperature,
+    double temperature,
     int on_threshold,
     int off_threshold,
     int status

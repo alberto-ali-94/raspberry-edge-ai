@@ -36,7 +36,7 @@ int adc_to_celsius(uint8_t raw, double *celsius){
 
     voltage = raw / 256.0 * 3.3;
     if ((voltage <= 0.0) || (voltage >= 3.3)){
-            printf("Error! Voltage out of ranges");
+            printf("Error! Voltage out of ranges\n");
             return -1;
     }
     Rt = 10 * voltage / (3.3 - voltage);
