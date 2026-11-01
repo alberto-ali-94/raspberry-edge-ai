@@ -1,176 +1,157 @@
 # Raspberry Edge AI
 
-Raspberry Edge AI is a project to build a local intelligence system for **environmental monitoring** and **home security** on Raspberry Pi. It brings together embedded control, sensor and camera data, and models developed with Python and Keras.
+Raspberry Edge AI is a learning project that combines C/C++ embedded control on Raspberry Pi with Python/Keras model development. Its long-term goal is environmental monitoring and local AI-assisted security. Sensor logging, integrated inference, camera recognition, and remote notifications are future developments.
 
-The intended result is a system that can collect information from its surroundings, interpret it on the device, and trigger hardware actions or notifications. C provides the embedded foundations; Python and Keras support model development and the future inference pipeline.
+## Current application: Hardware Control Center
 
-The project is developed incrementally. The sections below distinguish the final vision, the capabilities currently implemented, and the additions recorded through successive commits.
+The `control_center` application reads a physical **NTC thermistor through a PCF8591 ADC**, accepts an initial temperature threshold from the keyboard, and controls an LED. Two GPIO buttons provide manual LED control and shutdown.
 
-## Final project vision
+The application uses two threads:
 
-### Intelligent environmental monitoring
+- The **main thread** handles keyboard input, GPIO events, sensor notifications, and all LED commands.
+- The **acquisition worker** reads the ADC, converts the result to degrees Celsius, and publishes the latest temperature.
 
-Collect measurements using the sensors provided with the **Freenove FNK0020 Ultimate Starter Kit**, process and store the data, and use AI models to detect anomalies and relevant patterns. The initial environmental monitoring scope uses kit components without additional sensor purchases.
+Python and Keras are not required to build or run this application. The notebooks in `Keras_Practice/` are separate learning experiments, not an inference pipeline connected to the Control Center.
 
-| Planned measurement | Kit component | Intended use |
+## Hardware and interfaces
+
+The development board is a Raspberry Pi 3 B+, using components from the Freenove FNK0020 kit. The ADC used by this implementation is specifically the **PCF8591**, not the ADS7830 variant covered by some kit tutorials.
+
+| Component | Interface or GPIO | Role |
 |---|---|---|
-| Ambient temperature (°C) | DHT11 | Track temperature changes and supply real readings to the temperature-control application |
-| Relative humidity (% RH) | DHT11 | Track moisture conditions alongside temperature |
-| Relative ambient light level | Photoresistor and ADC module | Record changes in illumination and distinguish brighter and darker conditions |
+| NTC thermistor and resistor divider | PCF8591 AIN0 | Analog temperature input |
+| PCF8591 ADC | `/dev/i2c-1`, 7-bit address `0x48` | Convert the divider voltage to an 8-bit sample |
+| LED with current-limiting resistor | GPIO19 | Automatic threshold indication and manual toggle |
+| Exit button | GPIO24 | Request orderly shutdown |
+| Toggle button | GPIO23 | Invert the LED state |
 
-A thermistor is also available in the kit as an alternative temperature-acquisition exercise using an ADC. It is not required alongside the DHT11 for the initial dataset. The Freenove documentation covers ADS7830 and PCF8591 ADC variants; the actual module must be identified before wiring and implementation.
+The application opens `/dev/gpiochip0`. GPIO numbers identify line offsets on the selected controller, not physical header pin numbers. Verify the controller and physical wiring for the board in use before running the application.
 
-Record each sample with its acquisition time, validate readings, and build time series for later analysis and Keras model development. Connect the results to local indicators and hardware responses. Photoresistor readings initially represent relative light levels, not calibrated lux measurements.
+Both buttons use internal pull-ups and connect their input to ground when pressed. The code requests falling-edge events and a **30 ms debounce period** for the two inputs. The LED line is configured as an output.
 
-These are planned integrations. The current application still receives temperatures from the keyboard; sensor acquisition and dataset logging have not yet been implemented. Component availability and the ADC variant will be checked against the physical kit before integration. The sensor scope follows the [official Freenove FNK0020 tutorials](https://docs.freenove.com/projects/fnk0020/en/latest/fnk0020/python-tutorial.html).
+The existing [circuit SVG](docs/images/control-center-circuit.svg) shows an earlier GPIO17/GPIO18/GPIO19 arrangement and does **not** describe the current circuit. It must not be used as the current wiring reference.
 
-### Home security with computer vision
+### Thermistor acquisition
 
-Use the kit's **HC-SR501 PIR sensor** to record motion events and support the security application. A PIR detects movement and does not reliably establish whether a stationary person remains present. PIR integration is planned.
+`thermistor.c` implements the PCF8591 acquisition and conversion:
 
-The longer-term vision also includes a camera and facial recognition to distinguish known faces from unrecognized faces. Camera hardware is outside the initial kit-sensor scope. The planned application has two operating states:
+1. Write control byte `0x00` to select AIN0 in single-ended mode.
+2. Read two bytes and use the second byte; the first belongs to the previous conversion.
+3. Calculate the voltage as `raw / 256.0 * 3.3`.
+4. Convert the divider voltage to resistance, then temperature using the NTC beta equation.
 
-- **DISARMED:** notifications for unrecognized faces are disabled.
-- **ARMED:** an unrecognized face can trigger a notification to the user.
+The conversion assumes a divider arranged as `3.3 V -> fixed resistor -> AIN0 node -> NTC -> ground`, with a 10 kΩ fixed resistor, a 10 kΩ NTC at 25 °C, and beta 3950 K. These are conversion assumptions, not a calibration result.
 
-Camera acquisition, model selection, recognition thresholds, and the notification channel remain to be developed. Accuracy, false positives, latency, and resource consumption must be evaluated on the target hardware before the system can be considered reliable.
+A zero ADC sample is rejected by the conversion guard. A successful I2C transfer alone does not establish that the thermistor is connected correctly or that the measured temperature is accurate.
 
-### Planned processing flow
+## Runtime behavior
 
-| Stage | Purpose |
+### Startup and threshold input
+
+The main thread opens the GPIO and I2C resources, creates a nonblocking notification pipe, initializes the mutex and condition variable, and starts the acquisition worker. The worker can acquire temperatures while the program waits for the initial threshold.
+
+Enter one signed decimal integer threshold and press Enter. The input reader accepts at most **three characters before Enter**, including an optional sign: `25`, `+25`, and `-12` fit. Invalid input is rejected without replacing the current value; oversized lines are discarded through their newline before another line is accepted.
+
+The initial threshold is currently read **once**. After it is accepted, the main thread stops monitoring the keyboard and continues monitoring the GPIO buttons and notification pipe. Changing the threshold during operation is not implemented yet.
+
+### Acquisition and event handling
+
+The worker publishes temperature and a sequence counter under a mutex, then writes a one-byte notification to the pipe. The main thread reads notifications and copies the latest shared result under the same mutex. Notifications are also consumed before the threshold is available, without applying automatic LED control.
+
+The pipe carries notifications, not temperature records. Shared memory holds only the latest sample: multiple acquisitions can be combined into one observed update. This is not a logger that preserves every sample. Sequence comparison prevents an already processed sample from being applied again merely because another notification remains in the pipe.
+
+After each acquisition and notification, the worker waits **two seconds** using `pthread_cond_timedwait`. Its deadline uses `CLOCK_MONOTONIC`. The pause can be interrupted by a stop request; an I2C operation already in progress is not interrupted by the condition variable. The interval between acquisitions includes processing time as well as the two-second pause, so this is not a fixed-rate or hard real-time sampler.
+
+The main thread uses `poll()` with **no timeout**. Before threshold entry it monitors stdin, GPIO, and the notification pipe; afterward it monitors GPIO and the pipe. It does not shut down merely because no events arrive.
+
+### Automatic and manual LED control
+
+Once a threshold is available, each newly observed valid sample determines the automatic LED state:
+
+- Temperature **strictly above** the threshold: LED on.
+- Temperature **at or below** the threshold: LED off.
+
+Although `update_alarm()` supports separate switching thresholds, the current call passes the same threshold for both, so the application has no hysteresis band.
+
+GPIO23 immediately toggles the LED, including before the initial threshold is entered. After threshold entry, the next newly observed valid sample can replace the manual state according to the temperature comparison. There is no persistent manual override.
+
+Automatic temperature and alarm messages are printed when the automatic decision actually changes the LED state, rather than for every sample. Manual toggles print their own alarm-state message. This output is therefore a record of state changes, not a continuous temperature stream.
+
+For example, with threshold `25`:
+
+| Event | Result |
 |---|---|
-| Acquisition | Read physical sensors and capture camera images |
-| Data preparation | Validate, organize, and record measurements and images |
-| Model development | Train and evaluate models with Python and Keras |
-| Edge inference | Run suitable models locally on Raspberry Pi |
-| Response | Update hardware outputs and generate application notifications |
+| New sample: 26.2 °C | LED on |
+| New sample: 27.0 °C | LED remains on; no repeated automatic state message |
+| Press GPIO23 | LED toggles off immediately |
+| Next new sample: 27.0 °C | LED turns on again |
+| New sample: 25.0 °C | LED off |
+| Press GPIO24 | Orderly shutdown requested |
 
-These are target capabilities, not a description of an already completed system. The current alarm state belongs to the temperature/LED control application; it is separate from the future ARMED/DISARMED security states.
+### Shutdown and errors
 
-## Development status
+GPIO24 sends execution to the shared cleanup path. The main thread sets the stop flag under the mutex, broadcasts on the condition variable, and joins the worker before releasing its resources. Cleanup destroys initialized synchronization objects, closes descriptors, and attempts to turn the LED off before releasing the GPIO lines.
 
-The current development milestone is a **Hardware Control Center** written in C. It establishes GPIO control and keyboard/button event handling before physical sensors and AI inference are integrated.
+Initialization flags allow cleanup after partially completed startup. A failure reported by the worker is stored under the mutex and propagated to the main thread. Unexpected worker synchronization failures terminate the process immediately with `_Exit`, bypassing ordinary cleanup. If the main thread cannot establish safe synchronization or confirm worker termination, it does not attempt to destroy resources that might still be in use.
 
-| Area | Status |
-|---|---|
-| Modular C application and Make-based build | Implemented |
-| LED control from manually entered temperatures | Implemented |
-| Keyboard and GPIO button handling with `poll()` | Implemented |
-| Shared event-driven threshold/temperature input, signed values, and oversized-line recovery | Implemented for interactive terminal input |
-| Numeric range checks in the reusable parser | Implemented |
-| Kernel-managed button debounce (30 ms) | Implemented |
-| Python/Keras practice notebooks | Included as standalone exercises |
-| Physical sensor acquisition and dataset logging | Planned |
-| Integrated on-device inference | Planned |
-| Camera-based security and notifications | Planned |
+Exit codes are numeric literals in the relevant branches of `main.c`, rather than a separate error-code framework. Inspect the status immediately after execution:
 
-The notebooks are learning resources, not an inference pipeline connected to the C application. The development board is currently a Raspberry Pi 3 B+; model feasibility and performance on this device remain to be measured.
+```sh
+./control_center
+echo $?
+```
 
-## Current capabilities
+A successful button-requested shutdown returns `0`. Examples of nonzero codes are `11` for opening the I2C bus, `60` for worker ADC acquisition, and `61` for temperature conversion. Cleanup reports additional failures while preserving an already selected primary error. Some module interfaces expose only success/failure, so the application code identifies the failed operation without always preserving a precise underlying system error.
 
-- Accept an integer threshold and manually entered temperature readings.
-- Monitor standard input and GPIO button events through one `poll()` call, including while waiting for the initial threshold.
-- Reuse one stateful input reader for threshold and temperature entry, preserving partial lines across reads.
-- Accept signed decimal integers, including `-1`, within a three-character line limit before Enter.
-- Reject empty input, nonnumeric input, and characters between the number and newline; keep running so the user can retry.
-- Reject oversized lines and discard their remaining characters through the newline before accepting another interactive line.
-- Check `strtol()` range errors and reject values outside `INT_MIN`–`INT_MAX` before converting to `int`, preserving the destination on failure.
-- Request a 30 ms debounce filter for both GPIO buttons through the Linux GPIO v2 API.
-- Drive an LED on GPIO17 with hysteresis: turn on above `threshold + 1`, turn off at or below `threshold - 1`, and retain the current state between those boundaries.
-- Toggle the LED manually with GPIO19 while waiting for either the threshold or a temperature.
-- Shut down with GPIO18, attempting to turn the LED off and release the GPIO request and controller.
-- Report the temperature comparison and alarm state; after threshold entry, refresh the visible terminal area when an event arrives.
-
-### Current hardware controls
-
-| GPIO line | Connection | Action |
-|---|---|---|
-| GPIO17 | LED with current-limiting resistor | Automatic control and manual toggle |
-| GPIO18 | Button to ground, internal pull-up | Orderly shutdown |
-| GPIO19 | Button to ground, internal pull-up | Invert the LED state |
-
-![Control Center circuit schematic: GPIO17 drives an LED through a 10 kΩ resistor; GPIO18 and GPIO19 connect normally open buttons to common ground, with internal pull-ups.](docs/images/control-center-circuit.svg)
-
-Electrical schematic for the current circuit. The dashed pull-ups are internal to the Raspberry Pi and enabled by software; solid lines show external wiring. `A` and `K` identify the LED anode and cathode. This schematic shows electrical connections, not breadboard positions.
-
-GPIO numbers are offsets within the selected controller, not physical header pin numbers. The current controller path is `/dev/gpiochip0`; verify it for the board being used.
-
-Button events use falling-edge detection without `ACTIVE_LOW`: pressing a button changes its input from high to low. Both inputs request a **30 ms debounce period** (`30000` microseconds). A separate GPIO v2 configuration attribute applies the filter only to GPIO18 and GPIO19; GPIO17 remains an output. Linux can emulate debounce in software when hardware debounce is unavailable. The application checks GPIO request failure before entering the event loop.
-
-Button behavior has been tested on the Raspberry Pi: one action per press, with no additional LED toggle while held or on release.
-
-The manual button changes the actual LED state. Subsequent valid temperatures apply hysteresis to that state, so a reading inside the hysteresis band preserves the manual result.
-
-## Build and run the current application
+## Build and run
 
 Requirements:
 
-- Linux with the GPIO character device API v2 and compatible headers.
-- A C11 compiler available as `gcc`, and Make.
-- Access to `/dev/gpiochip0` and available GPIO lines 17, 18, and 19.
-- The LED and buttons wired as described above.
-- A terminal supporting the display-control sequences used by the application.
+- Linux with GPIO character device API v2 and I2C userspace headers.
+- A C11 compiler available as `gcc`, Make, POSIX threads, and the math library.
+- Enabled I2C and permission to access `/dev/i2c-1` and `/dev/gpiochip0`.
+- The PCF8591/NTC circuit and the LED/buttons connected for the current configuration.
+- An interactive terminal for the current keyboard interface.
 
 From the repository root on the Raspberry Pi:
 
 ```sh
-make
+make -B
 ./control_center
 ```
 
-The Makefile compiles `main.c`, `io.c`, `temperature.c`, and `gpio.c`, then links `control_center`. It enables C11 and `-Wall -Wextra -Wpedantic`. Use `make -B` to force a complete rebuild.
+The Makefile compiles `main.c`, `io.c`, `temperature.c`, `gpio.c`, and `thermistor.c`. It uses C11, `-Wall -Wextra -Wpedantic`, and `-pthread`, and links the math library with `-lm`. `make -B` forces a full rebuild; subsequent ordinary builds can use `make`.
 
-Enter the threshold first, then one temperature per line. Both use the same five-byte buffer: at most three characters before Enter, followed by a newline and string terminator. An optional `+` or `-` sign counts toward the limit: `123`, `-12`, `+25`, `0`, and `-1` fit; `1234` and `-123` are rejected.
-
-The input policy rejects an invalid line as a whole: it never accepts a numeric prefix as a replacement for that line. For example, `12x` is rejected because it contains an unexpected suffix; `123x` and `1234` are rejected because they exceed the three-character limit. This length limit is an intentional design choice. Oversized lines are discarded through their newline, and the next interactive line can be read normally without a false EOF or shutdown. Invalid input leaves the current value and LED state unchanged. A rejected threshold keeps the application in threshold-entry mode. GPIO19 toggles the LED and GPIO18 exits during either input phase. Use an interactive terminal and submit one line at a time; arbitrary piped or redirected input is not yet supported reliably.
-
-The reusable integer parser resets `errno` before `strtol()`, rejects `ERANGE`, and checks `INT_MIN` / `INT_MAX` before the cast and output assignment. A return value of `0` means success; `-1` means rejection with the destination unchanged. These checks use standard C headers (`<errno.h>` and `<limits.h>`) and require no additional library dependency. The interactive three-character policy remains unchanged.
-
-End-of-input (for example, Ctrl+D at an empty terminal input line) and read errors trigger cleanup and shutdown. Both currently produce a nonzero application exit status.
-
-For example, with threshold `30` and the LED initially off:
-
-| Action | LED result |
-|---|---|
-| Enter `31` | Off: not strictly above the turn-on boundary `31` |
-| Enter `32` | On |
-| Enter `30` | Remains on, inside the hysteresis band |
-| Enter `29` | Off |
-| Press GPIO19 | On |
-| Press GPIO18 | Shutdown; LED switch-off attempted before releasing resources |
-
-The threshold comparison message and LED state may differ because the LED uses hysteresis. No physical temperature sensor is read yet. Python and Keras are not required to build or run this C milestone. Native macOS headers do not provide the Linux GPIO interfaces used by the full application.
+The full application uses Linux-specific GPIO/I2C interfaces and is not a native macOS program.
 
 ## Repository components
 
-The paths below are tracked by Git and are part of the project's shared files.
-
 | Path | Purpose |
 |---|---|
-| `main.c` | Application entry point, event loop, temperature logic, button actions, and cleanup |
-| `io.c` / `io.h` | Menu, `input_state` structure, shared `init_input()` / `read_input()` reader, integer conversion, and terminal display helpers |
-| `temperature.c` / `temperature.h` | Threshold comparison and hysteresis |
-| `gpio.c` / `gpio.h` | GPIO controller access, line requests, values, and descriptor cleanup |
-| `Makefile` | Main application build |
-| `Keras_Practice/` | Standalone Keras notebooks for learning and experimentation |
+| `main.c` | Acquisition worker, shared state, event loop, LED control, and resource lifecycle |
+| `thermistor.c` / `thermistor.h` | PCF8591 reads and NTC-to-Celsius conversion |
+| `io.c` / `io.h` | Menu, stateful keyboard reader, integer parser, and display helpers |
+| `temperature.c` / `temperature.h` | Temperature comparison and LED-state calculation |
+| `gpio.c` / `gpio.h` | Linux GPIO controller, line requests, values, and descriptor cleanup |
+| `Makefile` | Application compilation and linking |
+| `docs/images/control-center-circuit.svg` | Historical circuit drawing using the previous pin assignment |
+| `Keras_Practice/` | Standalone Python/Keras notebooks |
 
-## Known limitations
+## Known limitations and validation
 
-| Area | Current limitation |
-|---|---|
-| Short button presses | The 30 ms debounce filter can suppress presses that do not remain stable for the configured period. |
-| Multiple lines per read | The reader treats each accumulated buffer as one line. If a read contains a newline followed by part of another line, the remaining characters are not preserved correctly. Piped or redirected input and input batching require further work. |
-| Threshold arithmetic | The parser checks `long` and `int` ranges, but subsequent `threshold + 1` / `threshold - 1` arithmetic is not independently protected against integer overflow. The intentional three-character interactive limit keeps threshold values away from these extremes on the target. |
-| Event ordering | One GPIO event is read per iteration. Stdin is processed first if both sources are ready; shutdown has no guaranteed priority over pending work. |
-| Terminal display | After threshold entry, a GPIO event can erase the visible echo of unfinished input without removing it from pending input. Prompts are not consistently redisplayed after rejected lines or button events. The interface is not yet a persistent dashboard. |
-| I/O errors and EOF | Interrupted calls have no dedicated retry policy. EOF and read errors share the same reader result and both cause a nonzero exit status. |
-
-The latest application changes have been tested successfully on the Raspberry Pi, including interactive keyboard input, debounced button operation, and button-triggered shutdown. Targeted local checks covered valid signed input, rejected suffixes, partial-line accumulation, oversized-line recovery, a subsequent valid line, and EOF. Direct parser checks also passed 14 cases, including `INT_MIN`, `INT_MAX`, values just outside the `int` range, `long` overflow/underflow, and unchanged output on rejection. Range tests call the parser directly because the interactive buffer deliberately limits input length. These checks do not establish general support for arbitrary byte streams.
+- **Worker failure while main is waiting:** ordinary worker errors update shared state but do not send a terminal notification. Because `poll()` has no timeout and the main thread keeps the pipe writer open, an error can remain unnoticed until another monitored event wakes the main thread. Updating shared memory alone does not wake `poll()`.
+- **Terminal input display:** asynchronous messages can split the visible echo of a line being typed. The program does not redraw the unfinished line. Visual disruption does not by itself prove that input characters were lost.
+- **Interactive input scope:** the reader has a three-character limit and does not reliably preserve multiple lines delivered in one read. Keyboard read errors and EOF share a return value; the keyboard reader does not yet retry interrupted reads. GPIO and notification-pipe reads, notification writes, and `poll()` do handle `EINTR`.
+- **Event ordering:** GPIO handling precedes keyboard and sensor handling, but only one GPIO event is read per iteration. Exit has no guaranteed priority over another GPIO event already ahead of it in the queue. A newly observed sample processed after a toggle in the same iteration can restore automatic control immediately.
+- **Initial threshold:** entering it does not independently reapply a sample already processed before threshold entry; automatic control waits for a new sample update.
+- **Hardware accuracy:** thermistor acquisition has been reported working on the Raspberry Pi after correcting a zero-sample issue. Calibration against a reference temperature and disconnected-sensor recovery have not been established.
+- **Verification scope:** local isolated checks exercised synchronization, selected error paths, notification reads, and cleanup. They do not replace a complete hardware acceptance test of the latest program.
+- **Signal shutdown:** Ctrl+C does not use the button's cooperative cleanup path; no application signal handler is installed.
 
 ## Roadmap
 
-1. **Harden embedded control:** support multiple input lines per read, protect threshold arithmetic independently of the input length policy, improve terminal prompts, and make shutdown/event handling more predictable.
-2. **Acquire real data:** integrate the kit DHT11 and photoresistor/ADC for temperature, humidity, and relative light measurements; add PIR motion events and record timestamped datasets with reproducible sampling and logging.
-3. **Develop models:** build and evaluate Keras pipelines for environmental anomalies and camera-based recognition.
-4. **Deploy locally:** adapt selected models to the target device and measure accuracy, latency, and resource use.
-5. **Integrate the applications:** connect acquisition, inference, hardware actions, and the planned security notifications.
+1. Allow threshold changes during operation and preserve a readable input line while asynchronous events are displayed.
+2. Ensure worker failures reliably wake the main event loop and consolidate event ordering and hardware verification.
+3. Extend the environmental station with timestamped logging and additional kit sensors, such as light, humidity, and PIR motion inputs, after checking their hardware and interfaces.
+4. Develop and evaluate Keras models, save reproducible model/preprocessing artifacts, and measure inference feasibility on the target device.
+5. Connect acquisition, inference, hardware responses, and the future camera-based security application. Camera hardware, recognition policy, and notification channels remain to be selected and implemented.
