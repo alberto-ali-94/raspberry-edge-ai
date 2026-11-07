@@ -23,6 +23,20 @@ GPIO 24: EXIT_BUTTON
 GPIO 23: ALERT_BUTTON
 ******************
 */
+typedef enum {
+    EVENT_SAMPLE,
+    EVENT_THRESHOLD_ACCEPTED,
+    EVENT_LED_CHANGED
+} event_type_t;
+
+typedef struct {
+    event_type_t type;
+    struct timespec instant;
+    unsigned long sequence;
+    double temperature;
+    int threshold;
+    int led_state;
+} app_event_t;
 
 typedef struct {
     int FD_ADC;
@@ -164,6 +178,56 @@ synchronization_error:
     _Exit(worker_error_code);
 }
 
+
+int write_event(FILE *stream, const app_event_t *entry){
+
+    //Record print: timestamp_utc,type,sequence,temperature_c,threshold,led_state\n
+    char timestamp[32];
+    struct tm utc;
+    int rc;
+
+    if(gmtime_r(&entry->instant.tv_sec,&utc) == NULL){
+        fprintf(stderr,"Converting realtime clock in UTC failed; %s\n", strerror(errno));
+        return 98;
+    }
+    if(strftime(timestamp, sizeof(timestamp),"%Y-%m-%dT%H:%M:%SZ",&utc) == 0){
+        fprintf(stderr, "Writing UTC time formatted failed");
+        return 99;
+    }
+
+    if (entry->type == EVENT_SAMPLE){   
+        rc = fprintf(stream,"%s,EVENT_SAMPLE,%lu,%.2f,,\n",
+                                timestamp, entry->sequence, entry->temperature);
+        if(rc < 0){
+            fprintf(stderr, "Writing sequence-temperature failed: %s\n", strerror(errno));
+            return 95;
+        }
+        
+    } else if (entry->type == EVENT_LED_CHANGED){
+        rc = fprintf(stream, "%s,EVENT_LED_CHANGED,,,,%d\n",
+                                timestamp, entry->led_state);
+    } else if (entry->type == EVENT_THRESHOLD_ACCEPTED){
+        rc = fprintf(stream, "%s,EVENT_THRESHOLD_ACCEPTED,,,%d,\n",
+                                timestamp, entry->threshold);
+    } else {
+        fprintf(stderr, "Unknown event type\n");
+        return 95;
+    }
+    if(rc < 0){
+            fprintf(stderr, "Writing sequence-temperature failed: %s\n", strerror(errno));
+            return 95;
+        }
+    rc = fflush(stream);
+    if(rc == EOF){
+        fprintf(stderr,"Flushing failed: %s\n", strerror(errno));
+        return 96;
+    }
+
+    return 0;
+
+}
+
+
 int main(){
     int exit_value = 0;
     int worker_error_code = 0;
@@ -204,6 +268,10 @@ int main(){
     thread_args_t args;
     data_packet snapshot = {0};
     ssize_t n;
+    //Log File handling
+    FILE *log_file = NULL;
+    app_event_t record = {0};
+
 
     // Set up of input structure
     init_input(&input);
@@ -287,6 +355,15 @@ int main(){
     fds[1].events = POLLIN;
     fds[2].fd = pipe_fd[0];
     fds[2].events = POLLIN;
+
+    //=========================== FILE LOG OPENING ===========================
+
+    log_file = fopen("event.csv","a");
+    if (log_file == NULL){
+        fprintf(stderr,"Opening log file failed: %s\n", strerror(errno));
+        exit_value = 94;
+        goto closing;
+    }
 
     //=========================== THREAD CONFIG AND RUN ===========================
     rc = pthread_mutex_init(&args.mutex, NULL);
@@ -425,6 +502,19 @@ int main(){
                         printf("ALARM: Manually activated\n");
                     }else{
                         printf("ALARM: Manually deactivated\n");
+                    }
+                    record.type = EVENT_LED_CHANGED;
+                    record.led_state = led_state;
+                    rc = clock_gettime(CLOCK_REALTIME, &record.instant);
+                    if(rc == -1){
+                        fprintf(stderr, "Getting realtime clock failed: %s\n", strerror(errno));
+                        exit_value = 97;
+                        goto closing;
+                    }
+                    rc = write_event(log_file, &record);
+                    if (rc != 0){
+                        exit_value = rc;
+                        goto closing;
                     }     
                 }
             } else { //Incomplete GPIO event read
@@ -458,6 +548,19 @@ int main(){
                     goto closing;
             }else if ((rc == 1)){
                     threshold_ready = 1;
+                    record.type = EVENT_THRESHOLD_ACCEPTED;
+                    record.threshold = threshold;
+                    rc = clock_gettime(CLOCK_REALTIME, &record.instant);
+                    if(rc == -1){
+                        fprintf(stderr, "Getting realtime clock failed: %s\n", strerror(errno));
+                        exit_value = 97;
+                        goto closing;
+                    }
+                    rc = write_event(log_file, &record);
+                    if (rc != 0){
+                        exit_value = rc;
+                        goto closing;
+                    }
                     printf("You can enter a new threshold\n");
             } 
         }
@@ -503,6 +606,23 @@ int main(){
                     return 49;
                 }
                 //New sample: check the LED state and change it if necessary
+                if(new_sequence){
+                    record.type = EVENT_SAMPLE;
+                    record.sequence = snapshot.sequence;
+                    record.temperature = snapshot.temperature;
+                    rc = clock_gettime(CLOCK_REALTIME, &record.instant);
+                    if(rc == -1){
+                        fprintf(stderr, "Getting realtime clock failed: %s\n", strerror(errno));
+                        exit_value = 97;
+                        goto closing;
+                    }
+                    rc = write_event(log_file, &record);
+                    if (rc != 0){
+                        exit_value = rc;
+                        goto closing;
+                    }
+
+                }
                 if(threshold_ready && new_sequence){
                     desired_state = update_alarm(snapshot.temperature, (double)threshold,(double)threshold,led_state);
                     if(desired_state != led_state){
@@ -522,7 +642,21 @@ int main(){
                             printf("[MAIN] ALARM: Active\n");
                         }else{
                             printf("[MAIN] ALARM: Inactive\n");
-                        }  
+                        }
+                        record.type = EVENT_LED_CHANGED;
+                        record.led_state = led_state;
+                        rc = clock_gettime(CLOCK_REALTIME, &record.instant);
+                        if(rc == -1){
+                            fprintf(stderr, "Getting realtime clock failed: %s\n", strerror(errno));
+                            exit_value = 97;
+                            goto closing;
+                        }
+                        rc = write_event(log_file, &record);
+                        if (rc != 0){
+                            exit_value = rc;
+                            goto closing;
+                        }
+
                     }
                     
                 }
@@ -606,7 +740,13 @@ int main(){
                 mutex_ready = 0;
             }
         }
-
+        if(log_file != NULL){
+            rc=fclose(log_file);
+            if(rc){
+                fprintf(stderr, "Closing log file failed: %s\n", strerror(errno));
+                if (exit_value == 0) exit_value = 95;
+            }
+        }
         // Do not retry close: on Linux, the descriptor may already have been released.
         for (int i = 0; i < 2; ++i){
             if (pipe_fd[i] != -1){
