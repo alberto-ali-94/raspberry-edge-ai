@@ -170,6 +170,18 @@ worker_error:
         worker_error_code = 69;
         goto synchronization_error;
     }
+    written = write(local_arg->write_fd, &notification, sizeof(notification));
+    while ((written == -1) && (errno == EINTR)){
+        written = write(local_arg->write_fd, &notification, sizeof(notification));
+    }
+    if(written == 1){
+        //printf("[Thread] Alert written\n");
+    }
+    else if ((written == -1) && ((errno == EAGAIN) || (errno == EWOULDBLOCK))){
+        printf("[Thread] Nothing written, already pending alerts\n");
+    } else {
+        fprintf(stderr, "[Thread] Error in writing\n");
+    }
     return NULL;
 
 synchronization_error:
