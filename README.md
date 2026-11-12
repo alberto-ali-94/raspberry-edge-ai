@@ -1,8 +1,24 @@
 # Raspberry Edge AI
 
-Raspberry Edge AI is a learning project that combines C/C++ embedded control on Raspberry Pi with Python/Keras model development. Its long-term goal is environmental monitoring and local AI-assisted security. Sensor logging, integrated inference, camera recognition, and remote notifications are future developments.
+Raspberry Edge AI is a learning project combining **C embedded control on Raspberry Pi** with **Python/Keras model development** and a **local Python voice assistant**. The long-term goal is a modular system for acquisition, control, and AI-assisted monitoring.
 
-## Current application: Hardware Control Center
+## Available projects
+
+| Project | Runs on | Current scope |
+|---|---|---|
+| Hardware Control Center | Raspberry Pi 3 B+ / Linux | NTC/PCF8591 acquisition, GPIO buttons and LED control, runtime thresholds, and timestamped event logging |
+| **[Nova](nova/README.md)** | Apple Silicon Mac / Python 3.12 | Local Italian voice interaction using Whisper, Qwen3 Instruct, and Kokoro, with session history |
+| `Keras_Practice/` | Development machine | Separate Deep Learning notebooks; not an inference service connected to the C application |
+
+## Nova: local voice assistant
+
+**[Nova](nova/README.md)** records a question when Enter is pressed, transcribes it locally, generates a response through the local Ollama service, and speaks it using an Italian female voice. The current prototype uses a fixed three-second recording window and retains conversation history only for the running session.
+
+It uses `mlx-community/whisper-small-mlx`, `qwen3:4b-instruct`, and Kokoro-82M with `if_sara`. See the **[Nova README](nova/README.md)** for behavior and limitations, **[installation guide](nova/INSTALL.md)** for setup, and **[requirements.txt](nova/requirements.txt)** for the Python dependency snapshot.
+
+Nova is currently separate from the Raspberry Pi application. Atlas integration, automatic end-of-speech detection, wake-word activation, persistent memories, and an iPhone interface are planned. No cloud inference service is required by the current prototype.
+
+## Hardware Control Center
 
 The `control_center` application reads a physical **NTC thermistor through a PCF8591 ADC**, accepts a temperature threshold that can be changed from the keyboard during operation, and controls an LED. Two GPIO buttons provide manual LED control and shutdown.
 
@@ -77,6 +93,8 @@ GPIO23 immediately toggles the LED, including before the initial threshold is en
 
 Automatic temperature and alarm messages are printed when the automatic decision actually changes the LED state, rather than for every sample. Manual toggles print their own alarm-state message. This output is therefore a record of state changes, not a continuous temperature stream.
 
+The application also appends structured events to `event.csv`: processed samples, accepted thresholds, and LED transitions, with UTC timestamps and empty fields where a value does not apply. This records events processed by the main thread rather than guaranteeing retention of every worker acquisition.
+
 For example, with threshold `25`:
 
 | Event | Result |
@@ -138,10 +156,11 @@ The full application uses Linux-specific GPIO/I2C interfaces and is not a native
 | `Makefile` | Application compilation and linking |
 | `docs/images/control-center-circuit.svg` | Historical circuit drawing using the previous pin assignment |
 | `Keras_Practice/` | Standalone Python/Keras notebooks |
+| `nova/` | Local Mac voice assistant, installation guide, dependency snapshot, and recording diagnostic |
 
 ## Known limitations and validation
 
-- **Worker failure while main is waiting:** ordinary worker errors update shared state but do not send a terminal notification. Because `poll()` has no timeout and the main thread keeps the pipe writer open, an error can remain unnoticed until another monitored event wakes the main thread. Updating shared memory alone does not wake `poll()`.
+- **Worker failure notification:** ordinary acquisition/conversion errors publish the worker error under the mutex and attempt to notify the main loop through the pipe. Interrupted writes are retried; a full pipe means a notification is already pending. A permanent failure of the notification write still does not guarantee that the main loop wakes. This does not constitute comprehensive fault-recovery validation.
 - **Terminal input display:** asynchronous messages can split the visible echo of a line being typed. The program does not redraw the unfinished line. Visual disruption does not by itself prove that input characters were lost.
 - **Interactive input scope:** the reader has a three-character limit and does not reliably preserve multiple lines delivered in one read. Keyboard read errors and EOF share a return value; the keyboard reader does not yet retry interrupted reads. GPIO and notification-pipe reads, notification writes, and `poll()` do handle `EINTR`.
 - **Event ordering:** GPIO handling precedes keyboard and sensor handling, but only one GPIO event is read per iteration. Exit has no guaranteed priority over another GPIO event already ahead of it in the queue. A newly observed sample processed after a toggle in the same iteration can restore automatic control immediately.
@@ -152,8 +171,10 @@ The full application uses Linux-specific GPIO/I2C interfaces and is not a native
 
 ## Roadmap
 
-1. Preserve a readable input line while asynchronous events are displayed.
-2. Ensure worker failures reliably wake the main event loop and consolidate event ordering and hardware verification.
-3. Extend the environmental station with timestamped logging and additional kit sensors, such as light, humidity, and PIR motion inputs, after checking their hardware and interfaces.
-4. Develop and evaluate Keras models, save reproducible model/preprocessing artifacts, and measure inference feasibility on the target device.
-5. Connect acquisition, inference, hardware responses, and the future camera-based security application. Camera hardware, recognition policy, and notification channels remain to be selected and implemented.
+1. Extend the C work on bounded history, frame memory, image formats, camera acquisition, and event handling. Camera Module 3 NoIR has been tried separately; it is not yet integrated into the C application.
+2. Continue Keras experiments on optimization, Dense/CNN models, evaluation, and saved artifacts.
+3. Improve Nova with automatic end-of-turn detection, activation by name, bounded context, and persistent memories.
+4. Build Atlas as a shared layer for module status, events, recordings, and validated operations.
+5. Develop Cerberus from movement-triggered recordings toward evaluated known/unknown-person recognition and alerts; define Helios and an iPhone interface in later stages.
+
+Atlas, Cerberus recognition, Helios, and the iPhone interface are planned system components, not integrations already provided by this repository.
